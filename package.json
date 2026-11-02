@@ -2,7 +2,11 @@
   "name": "mokep",
   "displayName": "Mokep",
   "description": "Read-only viewer for .pen design files, driven by an agent over MCP.",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oranges1999/mokep.git"
+  },
   "publisher": "local",
   "private": true,
   "license": "UNLICENSED",
@@ -45,15 +49,88 @@
       {
         "command": "mokep.lint",
         "title": "Mokep: Lint open file"
+      },
+      {
+        "command": "mokep.newFile",
+        "title": "Mokep: New design file",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "mokep.openFile",
+        "title": "Mokep: Open design file",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "mokep.openRecent",
+        "title": "Mokep: Open recent design"
+      },
+      {
+        "command": "mokep.removeRecent",
+        "title": "Remove from recent designs",
+        "icon": "$(close)"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mokep",
+          "title": "Mokep",
+          "icon": "media/mokep.svg"
+        }
+      ]
+    },
+    "views": {
+      "mokep": [
+        {
+          "id": "mokep.files",
+          "name": "Recent designs"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "mokep.files",
+        "contents": "No designs opened yet.\n[New design file](command:mokep.newFile)\n[Open design file](command:mokep.openFile)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mokep.newFile",
+          "when": "view == mokep.files",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mokep.openFile",
+          "when": "view == mokep.files",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "mokep.removeRecent",
+          "when": "view == mokep.files && viewItem == mokep.recent",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mokep.openRecent",
+          "when": "false"
+        },
+        {
+          "command": "mokep.removeRecent",
+          "when": "false"
+        }
+      ]
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "package": "npm run build && vsce package --no-dependencies",
+    "package": "node esbuild.mjs --production && vsce package --no-dependencies --skip-license",
     "assets": "node scripts/fetch-fonts.mjs && node scripts/fetch-icons.mjs",
     "fixture": "node scripts/make-fixture.mjs && node scripts/make-test-image.mjs"
   },

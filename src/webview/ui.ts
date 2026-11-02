@@ -1,46 +1,61 @@
 import type { Comment } from "../core/comments";
-import { resolveVariable, defaultTheme } from "../core/variables";
+import { defaultTheme } from "../core/variables";
+import { AgentPresence } from "./agents";
+import { abs, cap, CSS, h, icon, ICONS, reduceMotion } from "./ui-kit";
 import { Viewer } from "./viewer";
 
 type Send = (m: Record<string, unknown>) => void;
 type Rect = { x: number; y: number; w: number; h: number };
 
-const h = <K extends keyof HTMLElementTagNameMap>(tag: K, style: string, ...kids: (Node | string)[]) => {
-  const e = document.createElement(tag);
-  e.setAttribute("style", style);
-  for (const k of kids) e.append(k);
-  return e;
-};
-
-/** Plain-DOM overlays: selection, hover, Alt measuring, comment pins, side panel, agent status bubble. */
+/** Plain-DOM overlays: selection, hover, Alt measuring, comment pins, info popup, search bar, agent status bubble. */
 export class Ui {
   selected: string | null = null;
   hovered: string | null = null;
   comments: Comment[] = [];
   private alt = false;
-  private panel = h("div", "position:fixed;top:0;right:0;bottom:0;width:300px;overflow:auto;background:#fffffff2;border-left:1px solid #d1d5db;font:12px/1.4 system-ui,sans-serif;color:#111827;padding:10px;box-sizing:border-box");
-  private overlay = h("div", "position:fixed;left:0;top:0;right:300px;bottom:0;pointer-events:none;overflow:hidden");
-  private selBox = h("div", "position:absolute;border:2px solid #2563eb;display:none;box-sizing:border-box");
-  private hovBox = h("div", "position:absolute;border:1px dashed #2563eb;display:none;box-sizing:border-box");
-  private bubble = h("div", "position:fixed;top:10px;left:50%;transform:translateX(-50%);padding:6px 12px;border-radius:999px;background:#111827;color:#fff;font:12px system-ui,sans-serif;display:none;pointer-events:none");
-  private measure = h("div", "position:absolute;inset:0");
-  private pins = h("div", "position:absolute;inset:0");
-  private flashLayer = h("div", "position:absolute;inset:0");
+  private shownFor: string | null = null;
+  private popup = h("div", "mk mk-card mk-popup mk-scroll");
+  private overlay = abs("position:fixed;inset:0;pointer-events:none;overflow:hidden");
+  private selBox = abs("position:absolute;border:2px solid #6ea8ff;display:none;box-sizing:border-box");
+  private hovBox = abs("position:absolute;border:1px dashed #6ea8ff99;display:none;box-sizing:border-box");
+  private bubbleText = h("span", "");
+  private bubble = h("div", "mk mk-card mk-bubble", h("span", "mk-dot"), this.bubbleText);
+  private measure = abs("position:absolute;inset:0");
+  private pins = abs("position:absolute;inset:0");
+  private flashLayer = abs("position:absolute;inset:0");
   private flashes: { id: string; t0: number }[] = [];
   private bubbleTimer: ReturnType<typeof setTimeout> | undefined;
-  private findBox = h("div", "position:fixed;top:48px;left:calc((100% - 300px) / 2);transform:translateX(-50%);width:360px;background:#fff;border:1px solid #9ca3af;border-radius:8px;box-shadow:0 8px 24px #0003;padding:8px;font:13px system-ui,sans-serif;display:none;z-index:10");
-  private findInput = h("input", "width:100%;box-sizing:border-box;padding:6px 8px;font:13px system-ui") as HTMLInputElement;
-  private findList = h("div", "margin-top:6px;max-height:300px;overflow:auto");
+  private findInput = h("input", "mk-input") as HTMLInputElement;
+  private themeSlot = h("span", "");
+  private findList = h("div", "mk-list mk-scroll");
+  private findBox = h("div", "mk mk-card mk-search");
   private findHits: string[] = [];
   private findIdx = 0;
-  private search = h("input", "width:100%;box-sizing:border-box;padding:4px 6px;margin-bottom:6px") as HTMLInputElement;
+  private agents = new AgentPresence();
+  private commentsOpen = false;
+  private showResolved = false;
+  private cBadge = h("span", "mk-badge");
+  private cLauncher = h("button", "mk mk-card mk-cbtn", icon("comment", 16), "Comments", this.cBadge);
+  private cPanel = h("div", "mk mk-card mk-cpanel mk-scroll");
+  /** View = inspect nodes (the default). Comment = click a node to leave a comment, with the list and pins. */
+  private mode: "view" | "comment" = "view";
+  private modeBadge = h("span", "mk-badge");
+  private modeView = h("button", "mk-mode", icon("cursor", 16), "View");
+  private modeComment = h("button", "mk-mode", icon("comment", 16), "Comment", this.modeBadge);
+  private modesBox = h("div", "mk mk-card mk-modes", this.modeView, this.modeComment);
+  private composer = h("div", "mk mk-card mk-composer");
+  private composing: string | null = null;
+  private emptyEl = h("div", "mk mk-emptystate", h("b", "", "This design is empty"), "Ask your agent to add a frame, and it appears here.");
 
   constructor(private v: Viewer, host: HTMLElement, private send: Send) {
-    this.search.placeholder = "Search frames…";
-    this.search.addEventListener("input", () => this.render());
-    this.findInput.placeholder = "Find frame (name or id)…";
-    this.findBox.append(this.findInput, this.findList);
-    document.body.append(this.findBox);
+    const style = document.createElement("style");
+    style.textContent = CSS;
+    document.head.append(style);
+    this.themeSlot.style.cssText = "display:flex;gap:6px;align-items:center;flex:none";
+    this.findInput.placeholder = "Search frames";
+    this.findBox.append(h("div", "mk-srow", icon("search"), this.findInput, h("span", "mk-kbd", "Ctrl F"), this.themeSlot), this.findList);
+    this.findInput.addEventListener("focus", () => this.openFind(false));
+    this.findInput.addEventListener("blur", () => { this.findList.style.display = "none"; });
     this.findInput.addEventListener("input", () => { this.findIdx = 0; this.runFind(); });
     this.findInput.addEventListener("keydown", (e) => {
       if (e.key === "ArrowDown") { this.findIdx = Math.min(this.findIdx + 1, this.findHits.length - 1); this.runFind(true); e.preventDefault(); }
@@ -49,14 +64,27 @@ export class Ui {
       else if (e.key === "Escape") { this.closeFind(); e.stopPropagation(); }
     });
     this.overlay.append(this.flashLayer, this.hovBox, this.selBox, this.measure, this.pins);
-    document.body.append(this.overlay, this.panel, this.bubble);
-    host.style.right = "300px";
-    host.style.width = "calc(100% - 300px)";
+    this.cLauncher.setAttribute("aria-expanded", "false");
+    this.cLauncher.addEventListener("click", () => this.toggleComments());
+    this.modeView.dataset.kind = "view";
+    this.modeComment.dataset.kind = "comment";
+    this.modeView.title = "View: inspect nodes (V)";
+    this.modeComment.title = "Comment: click a node to leave a comment (C)";
+    this.modeView.setAttribute("aria-pressed", "true");
+    this.modeComment.setAttribute("aria-pressed", "false");
+    this.modeView.addEventListener("click", () => this.setMode("view"));
+    this.modeComment.addEventListener("click", () => this.setMode("comment"));
+    document.body.append(this.overlay, this.popup, this.findBox, this.bubble, this.agents.el, this.modesBox, this.cLauncher, this.cPanel, this.composer, this.emptyEl);
+    host.style.right = "0";
     const el = v.app.canvas;
     let down: { x: number; y: number } | null = null;
     el.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
     el.addEventListener("pointerup", (e) => {
-      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 4) this.select(this.pick(e.clientX, e.clientY));
+      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 4) {
+        const id = this.pick(e.clientX, e.clientY);
+        if (this.mode === "comment") { if (id) this.openComposer(id, e.clientX, e.clientY); else this.closeComposer(); }
+        else this.select(id);
+      }
       down = null;
     });
     el.addEventListener("pointermove", (e) => { this.hovered = this.pick(e.clientX, e.clientY); });
@@ -64,7 +92,12 @@ export class Ui {
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
       if (e.key === "Alt") { this.alt = true; e.preventDefault(); }
-      if (e.key === "Escape") { if (this.findBox.style.display !== "none") this.closeFind(); else this.select(null); }
+      const typing = ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement as HTMLElement | null)?.tagName ?? "");
+      if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "v") this.setMode("view");
+        else if (e.key === "c") this.setMode("comment");
+      }
+      if (e.key === "Escape" && !typing) { if (this.composing) this.closeComposer(); else if (this.mode === "comment") this.setMode("view"); else this.select(null); }
     });
     window.addEventListener("keyup", (e) => { if (e.key === "Alt") this.alt = false; });
     window.addEventListener("blur", () => { this.alt = false; });
@@ -93,15 +126,72 @@ export class Ui {
 
   select(id: string | null) { this.selected = id; this.render(); }
 
-  // ---- find frame (Ctrl+F) ------------------------------------------------
-  openFind() {
-    this.findBox.style.display = "block";
-    this.findInput.value = "";
+  // ---- modes and the comment composer -------------------------------------
+  setMode(m: "view" | "comment") {
+    if (m === this.mode) return;
+    this.mode = m;
+    this.modeView.setAttribute("aria-pressed", String(m === "view"));
+    this.modeComment.setAttribute("aria-pressed", String(m === "comment"));
+    this.v.app.canvas.style.cursor = m === "comment" ? "crosshair" : "";
+    this.closeComposer(false);
+    this.select(null); // hides the info popup
+    this.toggleComments(m === "comment"); // the list follows the mode
+    this.renderComments();
+  }
+
+  private openComposer(id: string, x: number, y: number) {
+    const n = this.v.scene?.data.get(id);
+    if (!n) return;
+    this.composing = id;
+    this.select(id); // the blue box marks the target
+    const area = h("textarea", "mk-textarea") as HTMLTextAreaElement;
+    area.placeholder = "What should change? The agent reads this.";
+    const post = h("button", "mk-btn", "Post");
+    post.disabled = true;
+    const cancel = h("button", "mk-btn2", "Cancel");
+    const submit = () => {
+      const text = area.value.trim();
+      if (!text) return;
+      this.send({ type: "addComment", nodeId: id, text });
+      this.closeComposer();
+    };
+    area.addEventListener("input", () => { post.disabled = !area.value.trim(); });
+    area.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { this.closeComposer(); e.stopPropagation(); }
+      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+    });
+    post.addEventListener("click", submit);
+    cancel.addEventListener("click", () => this.closeComposer());
+    this.composer.replaceChildren(
+      h("div", "mk-head", h("span", "mk-glyph", icon(n.type in ICONS ? n.type : "dot", 16)),
+        h("div", "mk-headtext", h("div", "mk-title", `Comment on ${n.name ?? n.id}`), h("div", "mk-sub", cap(n.type)))),
+      area,
+      h("div", "mk-actions", h("span", "mk-kbd", "Ctrl Enter"), cancel, post),
+    );
+    this.composer.style.left = Math.max(8, Math.min(x + 14, window.innerWidth - 328)) + "px";
+    this.composer.style.top = Math.max(8, Math.min(y + 14, window.innerHeight - 230)) + "px";
+    this.composer.style.display = "block";
+    if (!reduceMotion()) this.composer.animate([{ opacity: 0, transform: "translateY(6px) scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 160, easing: "cubic-bezier(.2,.8,.2,1)" });
+    area.focus();
+  }
+
+  private closeComposer(clearSelection = true) {
+    if (!this.composing) return;
+    this.composing = null;
+    // A hidden textarea can keep focus for a moment, which would make the next Escape look like typing.
+    if (this.composer.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    this.composer.style.display = "none";
+    if (clearSelection && this.mode === "comment") this.select(null);
+  }
+
+  // ---- search bar (always visible, Ctrl+F focuses it) ---------------------
+  openFind(focus = true) {
+    this.findList.style.display = "block";
+    if (focus) { this.findInput.focus(); this.findInput.select(); }
     this.findIdx = 0;
     this.runFind();
-    this.findInput.focus();
   }
-  closeFind() { this.findBox.style.display = "none"; this.findInput.blur(); }
+  closeFind() { this.findInput.value = ""; this.findList.style.display = "none"; this.findInput.blur(); }
 
   private runFind(keepScroll = false) {
     const sc = this.v.scene;
@@ -114,13 +204,12 @@ export class Ui {
     this.findHits = hits.map(([id]) => id);
     this.findList.replaceChildren(...hits.map(([id, n], i) => {
       const b = this.v.boundsOf(id);
-      const row = h("div", `padding:4px 6px;border-radius:4px;cursor:pointer;display:flex;justify-content:space-between;gap:8px;${i === this.findIdx ? "background:#dbeafe" : ""}`,
-        h("span", "overflow:hidden;text-overflow:ellipsis;white-space:nowrap", n.name ?? id),
-        h("span", "color:#6b7280;flex:none", `${tops.has(id) ? "page · " : ""}${b ? Math.round(b.w) + "×" + Math.round(b.h) : ""}`));
+      const row = h("div", "mk-row", icon("frame", 14), h("span", "mk-name", n.name ?? id), h("span", "mk-meta", `${tops.has(id) ? "Page " : ""}${b ? Math.round(b.w) + " × " + Math.round(b.h) : ""}`));
+      if (i === this.findIdx) row.dataset.on = "";
       row.addEventListener("mousedown", (e) => { e.preventDefault(); this.goTo(id); });
       return row;
     }));
-    if (!hits.length) this.findList.append(h("div", "padding:4px 6px;color:#6b7280", "No frame matches"));
+    if (!hits.length) this.findList.append(h("div", "mk-empty", "No frame matches. Try part of a name or an id."));
     if (keepScroll) this.findList.children[this.findIdx]?.scrollIntoView({ block: "nearest" });
   }
 
@@ -178,14 +267,13 @@ export class Ui {
       if (sg.v <= 0) continue;
       const p = this.toScreen({ x: Math.min(sg.x1, sg.x2), y: Math.min(sg.y1, sg.y2), w: Math.abs(sg.x2 - sg.x1), h: Math.abs(sg.y2 - sg.y1) });
       const horizontal = sg.y1 === sg.y2;
-      this.measure.append(
-        h("div", `position:absolute;background:#f43f5e;left:${p.x}px;top:${p.y}px;width:${horizontal ? p.w : 1}px;height:${horizontal ? 1 : p.h}px`),
-        h("div", `position:absolute;background:#f43f5e;color:#fff;font:10px system-ui;padding:1px 4px;border-radius:3px;left:${p.x + (horizontal ? p.w / 2 : 4)}px;top:${p.y + (horizontal ? 4 : p.h / 2)}px`, String(Math.round(sg.v * 10) / 10)),
-      );
+      const label = abs(`position:absolute;background:#f43f5e;color:#fff;font:11px/1.3 "Segoe UI",system-ui,sans-serif;padding:1px 5px;border-radius:5px;left:${p.x + (horizontal ? p.w / 2 : 4)}px;top:${p.y + (horizontal ? 4 : p.h / 2)}px`);
+      label.textContent = String(Math.round(sg.v * 10) / 10);
+      this.measure.append(abs(`position:absolute;background:#f43f5e;left:${p.x}px;top:${p.y}px;width:${horizontal ? p.w : 1}px;height:${horizontal ? 1 : p.h}px`), label);
     }
   }
 
-  /** Briefly outline nodes an agent just changed or added. */
+  /** Briefly outline nodes the agent just changed or added (violet = the agent). */
   flash(ids: string[]) { const t0 = performance.now(); this.flashes.push(...ids.map((id) => ({ id, t0 }))); }
 
   private drawFlashes() {
@@ -196,12 +284,13 @@ export class Ui {
       if (!r) return [];
       const s = this.toScreen(r);
       const o = Math.max(0, 1 - (now - f.t0) / 1600);
-      return [h("div", `position:absolute;left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px;border:2px solid #f59e0b;background:#f59e0b26;box-sizing:border-box;opacity:${o}`)];
+      return [abs(`position:absolute;left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px;border:2px solid #a78bfa;background:#a78bfa26;box-sizing:border-box;opacity:${o}`)];
     }));
   }
 
   private drawPins() {
     this.pins.replaceChildren();
+    if (this.mode !== "comment") return;
     const open = this.comments.filter((c) => !c.resolved);
     const count = new Map<string, number>();
     open.forEach((c, idx) => {
@@ -210,106 +299,183 @@ export class Ui {
       const s = this.toScreen(r);
       const n = count.get(c.nodeId) ?? 0;
       count.set(c.nodeId, n + 1);
-      this.pins.append(h("div", `position:absolute;left:${s.x + s.w - 9 + n * 20}px;top:${s.y - 9}px;width:18px;height:18px;border-radius:50%;background:${c.author === "agent" ? "#7c3aed" : "#f59e0b"};color:#fff;font:10px/18px system-ui;text-align:center`, String(idx + 1)));
+      const pin = abs(`position:absolute;left:${s.x + s.w - 10 + n * 22}px;top:${s.y - 10}px;width:20px;height:20px;border-radius:50%;background:${c.author === "agent" ? "#a78bfa" : "#f5b942"};color:#17181c;box-shadow:0 0 0 2px #17181c;font:600 11px/20px 'Segoe UI',system-ui,sans-serif;text-align:center`);
+      pin.textContent = String(idx + 1);
+      this.pins.append(pin);
     });
   }
 
-  // ---- side panel ---------------------------------------------------------
+  // ---- status bubble (bottom centre) --------------------------------------
   setComments(list: Comment[]) { this.comments = list; this.render(); }
+
+  /** An agent did something. The indicator top right breathes in, stays while calls keep coming, then breathes out. */
+  setAgent(name: string, tool: string) { this.agents.set(name, tool); }
 
   setStatus(text: string, state: "working" | "idle" | string) {
     clearTimeout(this.bubbleTimer);
-    if (!text) { this.bubble.style.display = "none"; return; }
-    this.bubble.textContent = (state === "working" ? "● " : "") + text;
-    this.bubble.style.background = state === "working" ? "#2563eb" : "#111827";
-    this.bubble.style.display = "block";
+    if (!text) { this.agents.endAll(); this.bubble.style.display = "none"; return; }
+    const wasHidden = this.bubble.style.display === "none" || !this.bubble.style.display;
+    this.bubbleText.textContent = text;
+    this.bubble.dataset.state = state === "working" ? "working" : "idle";
+    this.bubble.style.display = "flex";
+    if (wasHidden && !reduceMotion()) this.bubble.animate([{ opacity: 0, transform: "translate(-50%, 10px)" }, { opacity: 1, transform: "translate(-50%, 0)" }], { duration: 180, easing: "ease-out" });
     if (state !== "working") this.bubbleTimer = setTimeout(() => { this.bubble.style.display = "none"; }, 6000);
   }
 
-  private section(title: string, ...kids: (Node | string)[]) {
-    return h("div", "margin:0 0 14px", h("div", "font-weight:600;margin-bottom:4px;color:#374151", title), ...kids);
-  }
-
+  // ---- info popup (only for the clicked node) -----------------------------
   render() {
-    const sc = this.v.scene;
-    const p = this.panel;
-    const keep = this.search.value;
-    p.replaceChildren();
-    if (!sc) return;
-    p.append(this.section("Frames", this.search, ...this.frameList(keep)));
-    p.append(this.selectionSection());
-    p.append(this.commentSection());
-    p.append(this.tokenSection());
-    p.append(h("div", "color:#6b7280", `${this.v.warnings.length} warning(s)`, ...this.v.warnings.slice(0, 6).map((w) => h("div", "margin-top:2px", "· " + w))));
-    this.search.value = keep;
+    if (!this.v.scene) return;
+    this.emptyEl.style.display = this.v.scene.frames.size ? "none" : "block";
+    this.renderThemes();
+    this.renderPopup();
+    this.renderComments();
   }
 
-  private frameList(filter: string) {
-    const q = filter.trim().toLowerCase();
-    return [...(this.v.scene?.frames.entries() ?? [])]
-      .filter(([, f]) => !q || (f.node.name ?? "").toLowerCase().includes(q))
-      .map(([id, f]) => {
-        const row = h("div", "padding:2px 4px;cursor:pointer;border-radius:4px", f.node.name ?? id);
-        row.addEventListener("click", () => { this.v.focusNode(id); this.select(id); });
-        row.addEventListener("mouseenter", () => { row.style.background = "#e5e7eb"; });
-        row.addEventListener("mouseleave", () => { row.style.background = ""; });
-        return row;
-      });
+  private renderThemes() {
+    const doc = this.v.doc;
+    const theme = doc ? { ...defaultTheme(doc), ...this.v.theme } : {};
+    this.themeSlot.replaceChildren(...Object.entries(doc?.themes ?? {}).map(([axis, values]) => {
+      const sel = h("select", "mk-select");
+      for (const val of values) { const o = document.createElement("option"); o.value = val; o.textContent = val; o.selected = theme[axis] === val; sel.append(o); }
+      sel.addEventListener("change", () => void this.v.setTheme(axis, sel.value));
+      return h("label", "mk-field", h("span", "", axis), sel); // labelled, so it is clearly the design's theme and not the extension's
+    }));
   }
 
-  private selectionSection() {
-    const n = this.selected ? this.v.scene?.data.get(this.selected) : null;
-    if (!n) return this.section("Selection", h("div", "color:#6b7280", "Click a node. Hold Alt over another node to measure."));
+  private row(k: string, v: string, swatch?: string) {
+    const val = h("span", "mk-v");
+    if (swatch) { const s = h("span", "mk-swatch"); s.style.background = swatch; val.append(s); }
+    val.append(v);
+    return [h("span", "mk-k", k), val];
+  }
+
+  private renderPopup() {
+    const n = this.mode === "view" && this.selected ? this.v.scene?.data.get(this.selected) : null;
+    const p = this.popup;
+    if (!n) {
+      if (!this.shownFor) return;
+      this.shownFor = null;
+      if (reduceMotion()) { p.style.display = "none"; return; }
+      p.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(-16px) scale(.97)" }], { duration: 140, easing: "ease-in" }).onfinish = () => { if (!this.shownFor) p.style.display = "none"; };
+      return;
+    }
     const b = this.rectOf(n.id);
     const { children, ...props } = n as Record<string, any>;
     const json = JSON.stringify(props, null, 1);
-    const add = h("button", "margin-top:6px", "Add comment on this node");
-    add.addEventListener("click", () => this.send({ type: "addComment", nodeId: n.id, nodeName: n.name ?? n.id }));
-    return this.section("Selection",
-      h("div", "", `${n.type} · ${n.name ?? ""}`), h("div", "color:#6b7280", `id ${n.id}`),
-      h("div", "", b ? `x ${Math.round(b.x)}  y ${Math.round(b.y)}  w ${Math.round(b.w)}  h ${Math.round(b.h)}` : ""),
-      h("pre", "margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:11px ui-monospace,monospace;max-height:220px;overflow:auto;background:#f3f4f6;padding:6px;border-radius:4px", json.length > 2000 ? json.slice(0, 2000) + "\n…" : json),
+
+    const close = h("button", "mk-iconbtn", icon("close", 14));
+    close.title = "Close";
+    close.setAttribute("aria-label", "Close");
+    close.addEventListener("click", () => this.select(null));
+
+    const idChip = h("button", "mk-chip", n.id);
+    idChip.title = "Copy id";
+    idChip.addEventListener("click", () => {
+      void navigator.clipboard?.writeText(n.id).then(() => { idChip.textContent = "Copied"; setTimeout(() => { idChip.textContent = n.id; }, 1200); }, () => undefined);
+    });
+
+    const glyph = h("span", "mk-glyph", icon(n.type in ICONS ? n.type : "dot", 16));
+    const geo = h("div", "mk-geo", ...(["x", "y", "w", "h"] as const).map((k) => h("div", "mk-cell", h("b", "", b ? String(Math.round(b[k])) : "-"), h("span", "", k.toUpperCase()))));
+
+    const rows: HTMLElement[] = [];
+    const color = (s: unknown) => (typeof s === "string" && /^(#|rgb|hsl)/i.test(s) ? s : undefined);
+    if (typeof props.fill === "string") rows.push(...this.row("Fill", props.fill, color(props.fill)));
+    if (props.layout) rows.push(...this.row("Layout", String(props.layout)));
+    if (props.cornerRadius !== undefined) rows.push(...this.row("Radius", Array.isArray(props.cornerRadius) ? props.cornerRadius.join(", ") : String(props.cornerRadius)));
+    if (props.opacity !== undefined) rows.push(...this.row("Opacity", String(props.opacity)));
+    if (n.type === "text" && props.fontFamily) rows.push(...this.row("Font", `${props.fontFamily}${props.fontSize ? " " + props.fontSize : ""}`));
+    if (children) rows.push(...this.row("Children", String((children as unknown[]).length)));
+
+    p.replaceChildren(
+      h("div", "mk-head", glyph, h("div", "mk-headtext", h("div", "mk-title", n.name ?? n.id), h("div", "mk-sub", cap(n.type), idChip)), close),
+      geo,
+      ...(rows.length ? [h("div", "mk-rows", ...rows)] : []),
+      h("details", "mk-details", h("summary", "", "All properties"), h("pre", "mk-pre", json.length > 2000 ? json.slice(0, 2000) + "\n…" : json)),
       this.animationNote(n),
-      children ? h("div", "color:#6b7280;margin-top:4px", `${(children as unknown[]).length} child node(s)`) : "",
-      add);
+      h("div", "mk-hint", "Hold Alt over another node to measure the distance."),
+    );
+    // Already open: the content was swapped above and that is all. Only a fresh open slides in.
+    const wasOpen = this.shownFor !== null;
+    this.shownFor = n.id;
+    p.style.display = "block";
+    if (wasOpen || reduceMotion()) return;
+    p.animate([{ opacity: 0, transform: "translateX(-16px) scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
   }
 
   /** Element animation is not part of the format; agents describe it in metadata ({ type: "animation", description }). */
   private animationNote(n: Record<string, any>) {
     const m = n.metadata;
     if (!m || m.type !== "animation" || typeof m.description !== "string") return "";
-    return h("div", "margin-top:6px;padding:6px;background:#ede9fe;border-radius:4px", h("div", "font-weight:600", "Animation (described)"), m.description);
+    return h("div", "mk-note", h("b", "", "Animation (described)"), m.description);
   }
 
-  private commentSection() {
-    const rows = this.comments.map((c, i) => {
-      const done = h("button", "margin-left:6px", c.resolved ? "Reopen" : "Resolve");
+  // ---- comments area (bottom right launcher, floating panel on the right) ----
+  private toggleComments(open = !this.commentsOpen) {
+    if (open === this.commentsOpen) return;
+    this.commentsOpen = open;
+    this.cLauncher.setAttribute("aria-expanded", String(open));
+    const p = this.cPanel;
+    if (open) {
+      this.renderComments();
+      p.style.display = "block";
+      if (!reduceMotion()) p.animate([{ opacity: 0, transform: "translateX(16px) scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
+    } else if (reduceMotion()) p.style.display = "none";
+    else p.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(16px) scale(.97)" }], { duration: 140, easing: "ease-in" }).onfinish = () => { if (!this.commentsOpen) p.style.display = "none"; };
+  }
+
+  private renderComments() {
+    const open = this.comments.filter((c) => !c.resolved);
+    this.cBadge.textContent = String(open.length);
+    this.cBadge.style.display = open.length ? "" : "none";
+    this.modeBadge.textContent = String(open.length);
+    this.modeBadge.style.display = open.length ? "" : "none";
+    this.cLauncher.style.display = this.mode === "comment" ? "flex" : "none";
+    this.cLauncher.setAttribute("aria-label", `Comments, ${open.length} open`);
+    if (!this.commentsOpen) return;
+    const p = this.cPanel, top = p.scrollTop;
+    const resolvedCount = this.comments.length - open.length;
+    const shown = this.comments.filter((c) => this.showResolved || !c.resolved);
+
+    const close = h("button", "mk-iconbtn", icon("close", 14));
+    close.title = "Close";
+    close.setAttribute("aria-label", "Close comments");
+    close.addEventListener("click", () => this.toggleComments(false));
+
+    const items = shown.map((c) => {
+      const node = this.v.scene?.data.get(c.nodeId);
+      // Same numbers as the pins on the canvas, which count open comments only.
+      const badge = h("span", "mk-avatar", c.resolved ? "✓" : String(open.indexOf(c) + 1));
+      if (c.author === "agent") badge.dataset.agent = "";
+      badge.title = c.author === "agent" ? "Agent" : "You";
+      const where = h("button", "mk-link", node ? (node.name ?? node.id) : "a deleted node");
+      if (node) where.addEventListener("click", () => { this.v.focusNode(c.nodeId); this.flash([c.nodeId]); });
+      else where.disabled = true;
+      const done = h("button", "mk-link", c.resolved ? "Reopen" : "Resolve");
       done.addEventListener("click", () => this.send({ type: "resolveComment", id: c.id, resolved: !c.resolved }));
-      const go = h("span", "cursor:pointer;color:#2563eb", `#${i + 1}`);
-      go.addEventListener("click", () => { this.v.focusNode(c.nodeId); this.select(c.nodeId); });
-      return h("div", `margin:4px 0;${c.resolved ? "opacity:.5;text-decoration:line-through" : ""}`, go, ` ${c.author}: ${c.text}`, done);
+      done.style.marginLeft = "8px";
+      // Deleting cannot be undone, so the first click only arms the button for three seconds.
+      const del = h("button", "mk-link", "Delete");
+      del.style.marginLeft = "8px";
+      let armed: ReturnType<typeof setTimeout> | undefined;
+      del.addEventListener("click", () => {
+        if (armed === undefined) { del.textContent = "Click again to delete"; armed = setTimeout(() => { armed = undefined; del.textContent = "Delete"; }, 3000); return; }
+        clearTimeout(armed);
+        this.send({ type: "deleteComment", id: c.id });
+      });
+      const item = h("div", "mk-citem", badge, h("div", "mk-ctext", h("div", "", c.text), h("div", "mk-cmeta", `${c.author === "agent" ? "Agent" : "You"} on `, where, done, del)));
+      if (c.resolved) item.dataset.done = "";
+      return item;
     });
-    return this.section(`Comments (${this.comments.filter((c) => !c.resolved).length} open)`, ...(rows.length ? rows : [h("div", "color:#6b7280", "None")]));
-  }
 
-  private tokenSection() {
-    const doc = this.v.doc;
-    if (!doc) return h("div", "");
-    const theme = { ...defaultTheme(doc), ...this.v.theme };
-    const kids: (Node | string)[] = [];
-    for (const [axis, values] of Object.entries(doc.themes ?? {})) {
-      const sel = document.createElement("select");
-      for (const val of values) { const o = document.createElement("option"); o.value = val; o.textContent = val; o.selected = theme[axis] === val; sel.append(o); }
-      sel.addEventListener("change", () => void this.v.setTheme(axis, sel.value));
-      kids.push(h("div", "margin:2px 0", `${axis}: `, sel));
-    }
-    for (const name of Object.keys(doc.variables ?? {}).filter((k) => !k.startsWith("--"))) {
-      const val = resolveVariable(doc, name, theme);
-      const isColor = doc.variables![name].type === "color" && typeof val === "string";
-      kids.push(h("div", "display:flex;align-items:center;gap:6px;margin:2px 0",
-        h("span", `display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid #d1d5db;background:${isColor ? String(val).replace(/[^#\w(),.% ]/g, "") : "transparent"}`),
-        h("span", "font:11px ui-monospace,monospace", `${name} = ${String(val)}`)));
-    }
-    return this.section("Design tokens", ...(kids.length ? kids : [h("div", "color:#6b7280", "No variables")]));
+    const toggle = resolvedCount ? h("button", "mk-link", `${this.showResolved ? "Hide" : "Show"} resolved (${resolvedCount})`) : "";
+    if (toggle instanceof HTMLElement) { toggle.style.marginTop = "12px"; toggle.addEventListener("click", () => { this.showResolved = !this.showResolved; this.renderComments(); }); }
+
+    p.replaceChildren(
+      h("div", "mk-head", h("div", "mk-headtext", h("div", "mk-title", "Comments"), h("div", "mk-sub", `${open.length} open`)), close),
+      ...(items.length ? items : [h("div", "mk-empty", "No comments yet. Click a node on the canvas to add one, and the agent will see it.")]),
+      toggle,
+      h("div", "mk-hint", "Click a node on the canvas to leave a comment."),
+    );
+    p.scrollTop = top;
   }
 }

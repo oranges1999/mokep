@@ -1,8 +1,13 @@
+import { rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import * as vscode from "vscode";
 import { BridgeServer } from "./bridge/server";
 import { lint } from "./core/lint";
-import { offerSetup } from "./setup";
-import { addComment, commentsPath, CommentsFile, parseComments, setResolved } from "./core/comments";
+import { offerSetup, serverPath } from "./setup";
+import { addComment, commentsPath, CommentsFile, parseComments, removeComment, setResolved } from "./core/comments";
+import { RecentFiles } from "./recent";
+import { webviewCsp } from "./csp";
 
 class PenDocument implements vscode.CustomDocument {
   constructor(readonly uri: vscode.Uri) {}
@@ -37,7 +42,7 @@ function pick(file?: string): Open {
 }
 
 class PenEditorProvider implements vscode.CustomReadonlyEditorProvider<PenDocument> {
-  constructor(private ctx: vscode.ExtensionContext) {}
+  constructor(private ctx: vscode.ExtensionContext, private recent: RecentFiles) {}
 
   openCustomDocument(uri: vscode.Uri) { return new PenDocument(uri); }
 
@@ -52,12 +57,13 @@ class PenEditorProvider implements vscode.CustomReadonlyEditorProvider<PenDocume
     const script = panel.webview.asWebviewUri(vscode.Uri.joinPath(dist, "webview.js"));
     const nonce = Math.random().toString(36).slice(2);
     panel.webview.html = `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${panel.webview.cspSource} data: blob:; font-src ${panel.webview.cspSource}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}' 'unsafe-eval'; connect-src ${panel.webview.cspSource};">
-<style>html,body,#host{margin:0;height:100%;overflow:hidden;background:#e5e7eb}#status{position:fixed;left:8px;bottom:8px;font:12px sans-serif;color:#6b7280}</style>
+<meta http-equiv="Content-Security-Policy" content="${webviewCsp(panel.webview.cspSource, `'nonce-${nonce}'`)}">
+<style>html,body,#host{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e}#status{position:fixed;left:8px;bottom:8px;font:12px sans-serif;color:#9ca3af}</style>
 </head><body><div id="host" data-fonts="${as(fonts)}" data-icons="${as(icons)}"></div><div id="status"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
 
     const entry: Open = { uri: doc.uri, panel, lastActive: Date.now() };
     open.set(panel, entry);
+    void this.recent.add(doc.uri.fsPath); // every way of opening a file ends up here, so the sidebar list stays complete
     panel.onDidChangeViewState(() => { if (panel.active) entry.lastActive = Date.now(); });
 
     const send = async () => {
@@ -73,11 +79,15 @@ class PenEditorProvider implements vscode.CustomReadonlyEditorProvider<PenDocume
     panel.webview.onDidReceiveMessage(async (m) => {
       if (m?.type === "ready") { void send(); void sendComments(); }
       if (m?.type === "addComment") {
-        const text = await vscode.window.showInputBox({ prompt: `Comment on "${m.nodeName}" (the agent can read it)`, ignoreFocusOut: true });
+        const text = String(m.text ?? "").trim(); // typed in the viewer's own comment composer
         if (text) { await writeComments(addComment(await readComments(), String(m.nodeId), text, "user")); void sendComments(); }
       }
       if (m?.type === "resolveComment") {
         const next = setResolved(await readComments(), String(m.id), !!m.resolved);
+        if (next) { await writeComments(next); void sendComments(); }
+      }
+      if (m?.type === "deleteComment") {
+        const next = removeComment(await readComments(), String(m.id));
         if (next) { await writeComments(next); void sendComments(); }
       }
       if (m?.type === "result") { const p = pending.get(m.reqId); if (p) { clearTimeout(p.timer); pending.delete(m.reqId); p.resolve(m); } }
@@ -91,9 +101,34 @@ class PenEditorProvider implements vscode.CustomReadonlyEditorProvider<PenDocume
   }
 }
 
+const openPen = (uri: vscode.Uri) => vscode.commands.executeCommand("vscode.openWith", uri, "mokep.pen");
+
 export async function activate(ctx: vscode.ExtensionContext) {
+  const recent = new RecentFiles(ctx.globalState);
   ctx.subscriptions.push(
-    vscode.window.registerCustomEditorProvider("mokep.pen", new PenEditorProvider(ctx), { supportsMultipleEditorsPerDocument: true }),
+    vscode.window.registerCustomEditorProvider("mokep.pen", new PenEditorProvider(ctx, recent), { supportsMultipleEditorsPerDocument: true }),
+    vscode.window.registerTreeDataProvider("mokep.files", recent),
+    vscode.commands.registerCommand("mokep.openFile", async () => {
+      const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { "Design files": ["pen"] }, openLabel: "Open" });
+      if (picked?.[0]) await openPen(picked[0]);
+    }),
+    vscode.commands.registerCommand("mokep.newFile", async () => {
+      const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const uri = await vscode.window.showSaveDialog({ filters: { "Design files": ["pen"] }, saveLabel: "Create", defaultUri: folder && vscode.Uri.joinPath(folder, "untitled.pen") });
+      if (!uri) return; // the save dialog already asks before overwriting an existing file
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(JSON.stringify({ version: "2.21", children: [] }, null, 1)));
+      await openPen(uri);
+    }),
+    vscode.commands.registerCommand("mokep.openRecent", async (file: string) => {
+      const uri = vscode.Uri.file(file);
+      try { await vscode.workspace.fs.stat(uri); } catch {
+        const pick = await vscode.window.showWarningMessage(`${file} no longer exists.`, "Remove from list");
+        if (pick) await recent.remove(file);
+        return;
+      }
+      await openPen(uri);
+    }),
+    vscode.commands.registerCommand("mokep.removeRecent", (file: string) => recent.remove(file)),
   );
 
   const bridge = new BridgeServer(async (req) => {
@@ -117,6 +152,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
         await ask(target, { type: "focus", nodeId: req.nodeId });
         return { ok: true };
       }
+      case "activity":
+        // Without a file (state, screenshot of the active file) every open viewer shows the agent.
+        for (const o of open.values()) if (!req.file || o.uri.fsPath.toLowerCase() === req.file.toLowerCase()) void o.panel.webview.postMessage({ type: "activity", agent: req.agent, tool: req.tool });
+        return { ok: true };
       case "status":
         for (const o of open.values()) void o.panel.webview.postMessage({ type: "status", text: req.text, state: req.state ?? "idle" });
         return { ok: true };
@@ -125,15 +164,20 @@ export async function activate(ctx: vscode.ExtensionContext) {
     }
   });
   await bridge.start();
-  ctx.subscriptions.push({ dispose: () => bridge.stop() });
+  // Older versions used one shared file for all windows; nothing reads it any more.
+  try { rmSync(join(homedir(), ".mokep", "bridge.json"), { force: true }); } catch { /* ignore */ }
+  ctx.subscriptions.push(
+    { dispose: () => bridge.stop() },
+    vscode.window.onDidChangeWindowState((s) => { if (s.focused) bridge.touch(); }), // the MCP server prefers the last focused window
+  );
 
+  serverPath(ctx); // refreshes ~/.mokep/mcp-server.js on every start, so an update reaches an already registered entry
   void offerSetup(ctx);
   const out = vscode.window.createOutputChannel("Mokep");
   ctx.subscriptions.push(
     out,
     vscode.commands.registerCommand("mokep.copyMcpCommand", async () => {
-      const server = vscode.Uri.joinPath(ctx.extensionUri, "dist", "mcp-server.js").fsPath;
-      await vscode.env.clipboard.writeText(`claude mcp add mokep -- node "${server}"`);
+      await vscode.env.clipboard.writeText(`claude mcp add --scope user mokep -- node "${serverPath(ctx)}"`);
       void vscode.window.showInformationMessage("MCP setup command copied. Paste it in a terminal.");
     }),
     vscode.commands.registerCommand("mokep.setupMcp", () => offerSetup(ctx, true)),

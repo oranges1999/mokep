@@ -1,6 +1,7 @@
 import { build, context } from "esbuild";
 const watch = process.argv.includes("--watch");
-const common = { bundle: true, sourcemap: true, logLevel: "info" };
+const prod = process.argv.includes("--production"); // used by `npm run package`: smaller files, no source maps
+const common = { bundle: true, sourcemap: !prod, minify: prod, logLevel: "info" };
 const jobs = [
   { ...common, entryPoints: ["src/extension.ts"], outfile: "dist/extension.js", platform: "node", format: "cjs", external: ["vscode", "bufferutil", "utf-8-validate"] },
   { ...common, entryPoints: ["src/mcp/server.ts"], outfile: "dist/mcp-server.js", platform: "node", format: "cjs", banner: { js: "#!/usr/bin/env node" } },

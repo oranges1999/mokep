@@ -16,7 +16,7 @@ VS Code extension: read-only viewer for `.pen` files (schema 2.21, https://docs.
 - Layout: yoga-layout. fit_content / fill_container map to Yoga auto / flex.
 - Panels: plain TypeScript.
 - MCP server is this tool's own. Atomic file writes (temp file then rename), validate id/ref after each edit, remind to commit if the file has uncommitted changes.
-- MCP <-> webview: local WebSocket, 127.0.0.1 only, with token.
+- MCP <-> webview: local WebSocket, 127.0.0.1 only, with token. One bridge file per VS Code window in `~/.mokep/bridges/<pid>.json`; the MCP client picks the window that has the file open, else the most recently focused one (`BridgeServer.touch` on window focus). Dead windows are cleaned up by pid check.
 - Agent screenshots come from the webview (only works while the tool is open).
 - Comments: `<name>.pen.comments.json`. Undo: git only.
 - Tests: Playwright + pixelmatch against pen.dev screenshots, by % diff.
@@ -36,7 +36,7 @@ M1 parse + shapes/fills/strokes + pan/zoom. M2 layout (Yoga) + text + fonts. M3 
 ## Status (M1-M6 first pass done)
 - Visual diff vs pen.dev exports (`fixtures/reference`, `npm test`): all 9 frames < 2% except 09-misc (~8%: missing test image, note/prompt look).
 - MCP tools (prefix mokep_): mokep_read, mokep_edit (atomic, validated, blocks on uncommitted git changes unless acknowledged), mokep_lint, mokep_open, mokep_state, mokep_focus, mokep_screenshot, mokep_status, mokep_comments, mokep_comment.
-- Setup: `npm i`, `npm run assets` (fonts+icons), `npm run fixture`, `npm run build`, `npm run package`, then `code --install-extension mokep-0.0.1.vsix` and run the "Mokep: Copy MCP setup command" command.
+- Setup: `npm i`, `npm run assets` (fonts+icons), `npm run fixture`, `npm run build`, `npm run package` (minified), then `code --install-extension mokep-<version>.vsix`. MCP is registered at `~/.mokep/mcp-server.js`, a copy the extension refreshes on every start, so updates never break the registration.
 
 ## Known deviations and shortcuts
 - Text content bound to a string variable ("$app.title") is resolved here; pen.dev shows the literal text.
@@ -53,3 +53,12 @@ M1 parse + shapes/fills/strokes + pan/zoom. M2 layout (Yoga) + text + fonts. M3 
 - Ctrl+F in the canvas finds frames by name or id.
 - First run asks (notification) to register the MCP server with Claude Code via `claude mcp add --scope user mokep`. It never runs without a click and needs Node and the `claude` CLI on PATH.
 - .pen files saved by pen.dev may be encrypted; this viewer only reads JSON.
+- Mouse wheel: plain scrolls vertically, Shift scrolls horizontally, Ctrl/Cmd (or trackpad pinch) zooms. Line-based wheels (deltaMode 1) are not scaled.
+- UI design system: tokens live in the CSS string at the top of `src/webview/ui-kit.ts` (dark surfaces, Segoe UI, one radius scale). Colour carries meaning: blue = selection, amber = your comments, violet = the agent. It applies to every extension element and never to the rendered design frames.
+- Canvas is dark (#1e1e1e) around the frames. The webview page sets body padding 0 because VS Code adds 20px side padding, which shifted the canvas away from the selection overlay.
+- Layout: mode switch top left (View = inspect nodes, Comment = leave comments; keys V and C, Esc leaves comment mode), search bar top centre (Ctrl+F focuses it, holds the theme select), info popup floats on the left in View mode and shows only the clicked node (slides in only when it opens; switching node swaps the content with no animation), status bubble bottom centre, agent indicator top right. Comment mode: click a node to type a comment in an inline composer (Ctrl+Enter posts, Esc cancels), the comments panel opens on the right (launcher bottom right), pins show on the canvas, the Comment button shows the open count. Comments are only written by the extension host from the posted text; there is no VS Code input box any more.
+- Agent indicator: the MCP server sends an `activity` bridge request on every tool call, with the agent name from the MCP client handshake. The viewer breathes in on the first call, breathes while calls keep coming, and breathes out after 5 s of quiet or when `mokep_status` clears the text. Reduced motion gets a static dot.
+- Sidebar: an activity bar icon (media/mokep.svg) opens the "Recent designs" view (`src/recent.ts`, last 20 files, stored in globalState, filled whenever the custom editor opens a file, so MCP opens count too). View title buttons: New design file (save dialog, writes `{ version: "2.21", children: [] }`, then opens it) and Open design file. Missing files offer removal from the list. An empty design shows an empty-state message and the camera frames the first frame that arrives.
+- Webview CSP (`src/csp.ts`, shared with `test/csp.test.ts`) has no `unsafe-eval`: Pixi uses `pixi.js/unsafe-eval`, Yoga needs `wasm-unsafe-eval` and `connect-src data:` for its embedded wasm.
+- MCP tools refuse any path that is not `.pen` or `.pen.json` (`assertPen`). Comments can be added, resolved, reopened and deleted from the viewer; the agent can add, resolve and reopen but not delete. There is no edit-comment yet.
+- UI code layout: `ui.ts` (behaviour), `ui-kit.ts` (CSS tokens, icons, DOM helpers), `agents.ts` (agent presence). Tests: `test/ui.test.ts` (real mouse and keyboard), `test/csp.test.ts`, `test/bridge-windows.test.ts`.

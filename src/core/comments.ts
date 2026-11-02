@@ -17,6 +17,11 @@ export function addComment(f: CommentsFile, nodeId: string, text: string, author
   return { version: 1, comments: [...f.comments, { id, nodeId, text, author, createdAt: now.toISOString(), resolved: false }] };
 }
 
+export function removeComment(f: CommentsFile, id: string): CommentsFile | null {
+  if (!f.comments.some((c) => c.id === id)) return null;
+  return { version: 1, comments: f.comments.filter((c) => c.id !== id) };
+}
+
 export function setResolved(f: CommentsFile, id: string, resolved = true): CommentsFile | null {
   if (!f.comments.some((c) => c.id === id)) return null;
   return { version: 1, comments: f.comments.map((c) => (c.id === id ? { ...c, resolved } : c)) };

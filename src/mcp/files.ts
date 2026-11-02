@@ -4,7 +4,13 @@ import { basename, dirname, resolve } from "node:path";
 import { PenDocument } from "../core/schema";
 import { parsePen } from "../core/parse";
 
+/** The tools only work on design files, so a mistyped path cannot read or rewrite some other JSON file. */
+export function assertPen(file: string) {
+  if (!/\.pen(\.json)?$/i.test(file)) throw new Error(`"${file}" is not a .pen file. These tools only work on .pen designs.`);
+}
+
 export function readDoc(file: string): PenDocument {
+  assertPen(file);
   return parsePen(readFileSync(resolve(file), "utf8")).doc;
 }
 

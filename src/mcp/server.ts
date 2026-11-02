@@ -9,9 +9,18 @@ import { PenNode } from "../core/schema";
 import { addComment, commentsPath, parseComments, setResolved } from "../core/comments";
 import { existsSync } from "node:fs";
 import { callBridge } from "./client";
-import { gitDirty, readDoc, writeAtomic } from "./files";
+import { assertPen, gitDirty, readDoc, writeAtomic } from "./files";
 
 const server = new McpServer({ name: "mokep", version: "0.0.1" });
+
+// Tell the viewer which agent is acting, on every tool call. The agent name comes from the MCP client handshake.
+// shortcut: fire-and-forget over one socket per call and a wrapper typed loosely, upgrade if tool volume grows.
+const touch = (tool: string, file?: unknown) => {
+  void callBridge({ type: "activity", agent: server.server.getClientVersion()?.name ?? "agent", tool, file: typeof file === "string" ? resolve(file) : undefined }, 3000).catch(() => undefined);
+};
+const register = server.registerTool.bind(server) as (...a: any[]) => unknown;
+(server as any).registerTool = (name: string, cfg: unknown, cb: (...a: any[]) => unknown) =>
+  register(name, cfg, (...args: any[]) => { touch(name.replace(/^mokep_/, ""), args[0]?.file); return cb(...args); });
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 const fail = (t: string) => ({ ...text(t), isError: true as const });
 
@@ -67,6 +76,7 @@ server.registerTool("mokep_lint", {
   inputSchema: { file: z.string() },
 }, async ({ file }) => {
   try {
+    assertPen(file);
     const issues = lint(readFileSync(resolve(file), "utf8"));
     return text(issues.length ? issues.map((i) => `${i.level}${i.node ? ` [${i.node}]` : ""}: ${i.message}`).join("\n") : "No issues.");
   } catch (e) { return fail((e as Error).message); }

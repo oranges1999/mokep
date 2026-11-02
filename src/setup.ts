@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import * as vscode from "vscode";
+import { stableServer } from "./serverCopy";
 import { buildSetupSteps } from "./setupSteps";
 
 const run = (cmd: string, args: string[]) => new Promise<{ ok: boolean; out: string }>((resolve) => {
@@ -23,27 +26,29 @@ export async function registerMcp(serverJs: string): Promise<SetupResult> {
 
 type Choice = "Install" | "Later" | "Don't ask again";
 
-/** First run (and after an update): ask once, never act without a click. */
+/** The MCP server path to register. It does not contain the extension version, so updates never break it. */
+export const serverPath = (ctx: vscode.ExtensionContext) => stableServer(join(ctx.extensionPath, "dist", "mcp-server.js"), join(homedir(), ".mokep"));
+
+/** First run: ask once, never act without a click. Registrations made by older versions point into the
+ *  versioned extension folder, so those users are asked once more. */
 export async function offerSetup(ctx: vscode.ExtensionContext, force = false) {
-  const version = String(ctx.extension.packageJSON.version);
-  const state = ctx.globalState.get<{ status?: string; version?: string }>("mokep.setup") ?? {};
+  const state = ctx.globalState.get<{ status?: string; stable?: boolean }>("mokep.setup") ?? {};
   if (!force) {
     if (state.status === "never") return;
-    if (state.status === "done" && state.version === version) return;
+    if (state.status === "done" && state.stable) return;
   }
-  const update = state.status === "done";
+  const upgrade = state.status === "done";
   const pick = await vscode.window.showInformationMessage(
-    update
-      ? "Mokep was updated. Re-register its MCP server with Claude Code so the agent uses the new version?"
+    upgrade
+      ? "Mokep now registers a path that survives updates. Register it again with Claude Code?"
       : "Mokep can register its MCP server with Claude Code so the agent can edit designs and see the result. Install now?",
     { modal: false }, "Install", "Later", "Don't ask again",
   ) as Choice | undefined;
   if (pick === "Don't ask again") return void ctx.globalState.update("mokep.setup", { status: "never" });
   if (pick !== "Install") return;
-  const server = vscode.Uri.joinPath(ctx.extensionUri, "dist", "mcp-server.js").fsPath;
-  const res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Mokep: registering MCP server…" }, () => registerMcp(server));
+  const res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Mokep: registering MCP server…" }, () => registerMcp(serverPath(ctx)));
   if (res.ok) {
-    await ctx.globalState.update("mokep.setup", { status: "done", version });
+    await ctx.globalState.update("mokep.setup", { status: "done", stable: true });
     void vscode.window.showInformationMessage(res.message);
   } else {
     const copy = await vscode.window.showWarningMessage(res.message, "Copy setup command");

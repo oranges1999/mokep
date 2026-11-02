@@ -2,21 +2,23 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { bridgeFile, BridgeRequest, BridgeResponse } from "./protocol";
+import { bridgeFile, BridgeInfo, BridgeRequest, BridgeResponse } from "./protocol";
 
 export type Handler = (req: BridgeRequest) => Promise<Omit<BridgeResponse, "id">>;
 
-/** Local WebSocket bridge: 127.0.0.1 only, first message must carry the token from bridge.json. */
+/** Local WebSocket bridge: 127.0.0.1 only, first message must carry the token from this window's bridge file. */
 export class BridgeServer {
   private wss: WebSocketServer | null = null;
+  private port = 0;
   readonly token = randomBytes(24).toString("hex");
 
-  constructor(private handle: Handler) {}
+  /** `id` names the bridge file; it is the extension host pid unless a test passes another one. */
+  constructor(private handle: Handler, private id: number = process.pid) {}
 
   async start(): Promise<number> {
     this.wss = new WebSocketServer({ host: "127.0.0.1", port: 0, maxPayload: 32 * 1024 * 1024 });
     await new Promise<void>((r) => this.wss!.once("listening", () => r()));
-    const port = (this.wss.address() as { port: number }).port;
+    this.port = (this.wss.address() as { port: number }).port;
     this.wss.on("connection", (ws, req) => {
       const addr = req.socket.remoteAddress;
       if (addr !== "127.0.0.1" && addr !== "::ffff:127.0.0.1") return ws.close();
@@ -25,9 +27,16 @@ export class BridgeServer {
       ws.on("close", () => clearTimeout(timer));
       ws.on("message", (data) => void this.onMessage(ws, data.toString(), () => authed, () => { authed = true; }));
     });
-    mkdirSync(dirname(bridgeFile()), { recursive: true });
-    writeFileSync(bridgeFile(), JSON.stringify({ port, token: this.token, pid: process.pid }), { mode: 0o600 });
-    return port;
+    this.touch();
+    return this.port;
+  }
+
+  /** Marks this window as the most recently used one. The MCP server prefers it when no file decides. */
+  touch() {
+    const file = bridgeFile(this.id);
+    const info: BridgeInfo = { port: this.port, token: this.token, pid: this.id, focusedAt: Date.now() };
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(info), { mode: 0o600 });
   }
 
   private async onMessage(ws: WebSocket, raw: string, isAuthed: () => boolean, auth: () => void) {
@@ -43,8 +52,9 @@ export class BridgeServer {
     try { reply(await this.handle(req)); } catch (e) { reply({ ok: false, error: (e as Error).message }); }
   }
 
+  /** Removes only this window's file, so closing one window never hides the others. */
   stop() {
     this.wss?.close();
-    try { rmSync(bridgeFile()); } catch { /* already gone */ }
+    try { rmSync(bridgeFile(this.id)); } catch { /* already gone */ }
   }
 }

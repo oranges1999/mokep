@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addComment, parseComments, setResolved, commentsPath } from "../src/core/comments";
+import { addComment, parseComments, removeComment, setResolved, commentsPath } from "../src/core/comments";
 
 describe("comments", () => {
   it("round-trips, resolves, and ignores garbage", () => {
@@ -14,5 +14,12 @@ describe("comments", () => {
     expect(done.comments[0].resolved).toBe(true);
     expect(setResolved(again, "missing")).toBeNull();
     expect(parseComments(JSON.stringify({ comments: [{ id: 1 }, { id: "x", nodeId: "n", text: "t" }] })).comments).toHaveLength(1);
+  });
+  it("deletes one comment and leaves the others", () => {
+    let f = addComment(parseComments(undefined), "n1", "first", "user");
+    f = addComment(f, "n2", "second", "agent");
+    const gone = removeComment(f, f.comments[0].id)!;
+    expect(gone.comments.map((c) => c.text)).toEqual(["second"]);
+    expect(removeComment(f, "missing")).toBeNull();
   });
 });

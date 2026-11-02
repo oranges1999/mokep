@@ -58,6 +58,16 @@ describe.skipIf(!existsSync(SERVER))("MCP server", () => {
     await call("mokep_comment", { file, action: "resolve", id: open[0].id });
     expect((await call("mokep_comments", { file })).text).toBe("No open comments.");
   });
+  it("refuses files that are not .pen designs, without touching them", async () => {
+    const other = join(dir, "settings.json");
+    writeFileSync(other, JSON.stringify({ children: [], keep: "me" }));
+    for (const [tool, args] of [["mokep_read", { file: other }], ["mokep_lint", { file: other }], ["mokep_edit", { file: other, ops: [{ op: "delete", id: "x" }] }]] as const) {
+      const r = await call(tool, args as Record<string, unknown>);
+      expect(r.error).toBe(true);
+      expect(r.text).toMatch(/not a \.pen file/);
+    }
+    expect(JSON.parse(readFileSync(other, "utf8"))).toEqual({ children: [], keep: "me" });
+  });
   it("lints", async () => {
     const r = await call("mokep_lint", { file });
     expect(r.error).toBe(false);
@@ -67,6 +77,16 @@ describe.skipIf(!existsSync(SERVER))("MCP server", () => {
     const r = await call("mokep_state", {});
     expect(r.error).toBe(true);
     expect(r.text).toMatch(/not running/);
+  });
+  it("tells the viewer which agent is acting and on which file", async () => {
+    const seen: any[] = [];
+    const bridge = new BridgeServer(async (req) => { seen.push(req); return { ok: true }; });
+    await bridge.start();
+    try {
+      await call("mokep_lint", { file });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(seen.find((q) => q.type === "activity")).toMatchObject({ agent: "test", tool: "lint", file: file });
+    } finally { bridge.stop(); }
   });
 });
 

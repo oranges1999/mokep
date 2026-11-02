@@ -1,3 +1,4 @@
+import "pixi.js/unsafe-eval"; // shader and uniform code without eval, so the webview CSP can drop 'unsafe-eval'
 import { Application, Container, Rectangle } from "pixi.js";
 import { parsePen } from "../core/parse";
 import { expandRefs } from "../core/instances";
@@ -27,7 +28,7 @@ export class Viewer {
   private resTimer: ReturnType<typeof setTimeout> | undefined;
 
   async init(host: HTMLElement) {
-    await this.app.init({ resizeTo: host, background: "#e5e7eb", antialias: true, autoDensity: true, resolution: window.devicePixelRatio || 1, preserveDrawingBuffer: true, useBackBuffer: true });
+    await this.app.init({ resizeTo: host, background: "#1e1e1e", antialias: true, autoDensity: true, resolution: window.devicePixelRatio || 1, preserveDrawingBuffer: true, useBackBuffer: true });
     host.appendChild(this.app.canvas);
     this.app.stage.addChild(this.world);
     this.bindCamera(this.app.canvas);
@@ -75,8 +76,9 @@ export class Viewer {
     if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       for (const id of changed) {
         const o = prev.get(id)!, c = sc.nodes.get(id)!;
-        if (Math.abs(c.position.x - o.x) > 0.01) this.tweens.push({ c, prop: "x", from: o.x, to: c.position.x, elapsed: 0, dur: 350 });
-        if (Math.abs(c.position.y - o.y) > 0.01) this.tweens.push({ c, prop: "y", from: o.y, to: c.position.y, elapsed: 0, dur: 350 });
+        const to = { x: c.position.x, y: c.position.y };
+        if (Math.abs(to.x - o.x) > 0.01) { this.tweens.push({ c, prop: "x", from: o.x, to: to.x, elapsed: 0, dur: 350 }); c.position.x = o.x; }
+        if (Math.abs(to.y - o.y) > 0.01) { this.tweens.push({ c, prop: "y", from: o.y, to: to.y, elapsed: 0, dur: 350 }); c.position.y = o.y; }
       }
       for (const id of newTop) { const c = sc.nodes.get(id)!; const to = c.alpha; c.alpha = 0; this.tweens.push({ c, prop: "alpha", from: 0, to, elapsed: 0, dur: 300 }); }
     }
@@ -174,6 +176,8 @@ export class Viewer {
 
   fitAll() {
     const b = this.world.getLocalBounds();
+    // An empty design has no bounds; show a default-sized area instead of zooming in to infinity.
+    if (b.width < 1 || b.height < 1) return this.fitRect(0, 0, 1200, 800);
     this.fitRect(b.x, b.y, b.width, b.height);
   }
 
@@ -193,6 +197,13 @@ export class Viewer {
   private bindCamera(el: HTMLCanvasElement) {
     el.addEventListener("wheel", (e) => {
       e.preventDefault();
+      // Plain wheel scrolls, Shift scrolls sideways, Ctrl (or a trackpad pinch, which sets ctrlKey) zooms.
+      if (!e.ctrlKey && !e.metaKey) {
+        // shortcut: assumes pixel deltas, a line-based wheel (deltaMode 1) scrolls too little, upgrade if reported.
+        if (e.shiftKey) this.world.x -= e.deltaX || e.deltaY;
+        else { this.world.x -= e.deltaX; this.world.y -= e.deltaY; }
+        return;
+      }
       const k = Math.exp(-e.deltaY * 0.0015);
       const rect = el.getBoundingClientRect();
       const px = e.clientX - rect.left, py = e.clientY - rect.top;
