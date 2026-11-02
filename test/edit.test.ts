@@ -66,4 +66,10 @@ describe("lint", () => {
     expect(m).toMatch(/fill_container used outside/);
     expect(m).toMatch(/never run/);
   });
+  it("flags a stroke written as an object but accepts colours and paints", () => {
+    const frame = (stroke: unknown) => JSON.stringify({ version: "2.21", children: [{ id: "f", type: "frame", stroke }] });
+    expect(lint(frame({ thickness: 1, fill: "#000" })).map((i) => i.message).join("|")).toMatch(/stroke must be/);
+    expect(lint(frame("#000")).filter((i) => /stroke must be/.test(i.message))).toEqual([]);
+    expect(lint(frame({ type: "color", color: "#000" })).filter((i) => /stroke must be/.test(i.message))).toEqual([]);
+  });
 });

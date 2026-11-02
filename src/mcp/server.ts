@@ -17,6 +17,10 @@ const INSTRUCTIONS = [
   "When you have completely finished, with no more Mokep calls to make, call mokep_status once with state \"idle\" and a short summary (an empty text also works) so the glow can turn off.",
   "While you work you can call mokep_status with state \"working\" and a short text, so the user can read what you are doing.",
   "To show the user where the frames you mention are, call mokep_focus with their ids (nodeIds for several): the camera flies there and the frames' outlines breathe for a few seconds.",
+  "To design quickly: build one section per mokep_edit call (nav, then hero, then the next section) instead of the whole page in one call, so the user sees it appear and a mistake costs one section.",
+  "Give the frame a fixed width and let sections use width fill_container with layout vertical or horizontal, gap and padding; avoid x/y on nested nodes.",
+  "A stroke is a paint plus separate props: \"stroke\": \"#14130F\", \"strokeWidth\": 1.5, \"strokeAlignment\": \"inner\". Do not write stroke as an object with thickness or fill.",
+  "Check with mokep_lint and mokep_state (its warnings list unsupported properties) after each section, and take screenshots of one section with a nodeId, not the whole page, because large images are the slowest part of a call.",
 ].join(" ");
 
 const server = new McpServer({ name: "mokep", version: "0.0.1" }, { instructions: INSTRUCTIONS });

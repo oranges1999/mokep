@@ -23,6 +23,8 @@ export function lint(text: string): LintIssue[] {
     }
     if ((n.width === "fill_container" || n.height === "fill_container") && !parentFlex && parent) out.push({ level: "warning", node: n.id, message: "fill_container used outside an auto-layout parent" });
     if (parentFlex && (n.x !== undefined || n.y !== undefined) && n.layoutPosition !== "absolute") out.push({ level: "warning", node: n.id, message: "x/y are ignored inside an auto-layout parent" });
+    // A paint object always has a type; {fill, thickness, align} is the wrong shape and draws nothing.
+    if ([n.stroke].flat().some((s) => s && typeof s === "object" && !(s as { type?: unknown }).type)) out.push({ level: "error", node: n.id, message: 'stroke must be a colour or paint; write "stroke": "#000", "strokeWidth": 1, "strokeAlignment": "inner"' });
     if (n.type === "icon" && !n.icon) out.push({ level: "warning", node: n.id, message: "icon without a name" });
     if (n.type === "script" || n.type === "browser") out.push({ level: "warning", node: n.id, message: `${n.type} nodes are shown as placeholders and never run` });
     n.children?.forEach((c) => walk(c, n));
