@@ -1,0 +1,17 @@
+node_modules/**
+.fonts-tmp/**
+.icons-tmp/**
+.playwright-mcp/**
+.git/**
+src/**
+test/**
+harness/**
+scripts/**
+fixtures/**
+.gitignore
+tsconfig.json
+esbuild.mjs
+package-lock.json
+**/*.map
+dist/harness.js
+*.vsix

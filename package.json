@@ -1,0 +1,80 @@
+{
+  "name": "mokep",
+  "displayName": "Mokep",
+  "description": "Read-only viewer for .pen design files, driven by an agent over MCP.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "mokep.pen",
+        "displayName": "Mokep",
+        "selector": [
+          {
+            "filenamePattern": "*.pen"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "mokep.copyMcpCommand",
+        "title": "Mokep: Copy MCP setup command"
+      },
+      {
+        "command": "mokep.setupMcp",
+        "title": "Mokep: Set up MCP for Claude Code"
+      },
+      {
+        "command": "mokep.goToFrame",
+        "title": "Mokep: Go to frame"
+      },
+      {
+        "command": "mokep.lint",
+        "title": "Mokep: Lint open file"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "package": "npm run build && vsce package --no-dependencies",
+    "assets": "node scripts/fetch-fonts.mjs && node scripts/fetch-icons.mjs",
+    "fixture": "node scripts/make-fixture.mjs && node scripts/make-test-image.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pngjs": "^6.0.5",
+    "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.18.2",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "pixelmatch": "^8.0.0",
+    "playwright-core": "^1.64.1",
+    "pngjs": "^7.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "pixi.js": "^8.22.0",
+    "ws": "^8.22.1",
+    "yoga-layout": "^3.2.1",
+    "zod": "^4.6.7"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "subsets": ["latin", "latin-ext", "vietnamese"],
+  "staticWeights": ["300", "400", "500", "600", "700", "800"],
+  "allowedLicenses": ["OFL-1.1", "Apache-2.0"],
+  "families": [
+    "Inter", "Roboto", "Be Vietnam Pro", "Montserrat", "Open Sans", "Noto Sans", "Plus Jakarta Sans",
+    "Lexend", "Nunito", "Work Sans", "Mulish", "Raleway", "Quicksand", "Source Sans 3", "Fira Sans",
+    "Space Grotesk", "Manrope", "Poppins", "DM Sans", "Playfair Display", "Lora", "Merriweather",
+    "Noto Serif", "JetBrains Mono", "Roboto Mono"
+  ]
+}
