@@ -11,8 +11,9 @@ export type BridgeRequest =
   | { id: number; type: "hello"; token: string }
   | { id: number; type: "state" }
   | { id: number; type: "open"; file: string }
-  | { id: number; type: "screenshot"; file?: string; nodeId?: string; scale?: number }
-  | { id: number; type: "focus"; file?: string; nodeId: string }
+  | { id: number; type: "screenshot"; file?: string; nodeId?: string; scale?: number; view?: boolean }
+  | { id: number; type: "focus"; file?: string; nodeId?: string; nodeIds?: string[] }
+  | { id: number; type: "selection"; file?: string }
   | { id: number; type: "status"; text: string; state?: string }
   | { id: number; type: "activity"; agent: string; tool: string; file?: string };
 

@@ -8,7 +8,7 @@ export const CSS = `
 .mk :focus-visible{outline:2px solid var(--mk-accent);outline-offset:2px}
 .mk-card{background:var(--mk-surface);border-radius:var(--mk-r-lg);box-shadow:0 0 0 1px var(--mk-line),0 18px 40px -14px #000c}
 .mk-scroll{scrollbar-width:thin;scrollbar-color:#3a3e48 transparent}
-.mk-popup{position:fixed;left:16px;top:68px;width:312px;max-height:calc(100% - 148px);overflow:auto;display:none;padding:14px;box-sizing:border-box;z-index:5}
+.mk-popup{position:fixed;left:16px;top:16px;width:312px;max-height:calc(100% - 100px);overflow:auto;display:none;padding:14px;box-sizing:border-box;z-index:5}
 .mk-head{display:flex;gap:10px;align-items:flex-start}
 .mk-glyph{flex:none;width:30px;height:30px;border-radius:var(--mk-r-md);display:grid;place-items:center;background:color-mix(in srgb,var(--mk-accent) 16%,transparent);color:var(--mk-accent)}
 .mk-headtext{flex:1;min-width:0}
@@ -43,7 +43,7 @@ export const CSS = `
 .mk-citem[data-done]{opacity:.5}
 .mk-cmeta{margin-top:3px;color:var(--mk-muted);font-size:12px}
 .mk-btn:disabled{background:var(--mk-raised);color:var(--mk-muted);cursor:default;filter:none}
-.mk-modes{position:fixed;left:16px;top:12px;display:flex;gap:2px;padding:4px;z-index:10}
+.mk-modes{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;gap:2px;padding:4px;z-index:10}
 .mk-mode{display:flex;align-items:center;gap:6px;border:0;border-radius:var(--mk-r-md);padding:6px 10px;background:transparent;color:var(--mk-muted);font:600 12.5px var(--mk-font);cursor:pointer;transition:background .12s,color .12s}
 .mk-mode:hover{color:var(--mk-text)}
 .mk-mode[aria-pressed=true]{background:var(--mk-raised);color:var(--mk-text)}
@@ -77,6 +77,8 @@ export const CSS = `
 .mk-kbd{flex:none;border-radius:5px;padding:2px 6px;background:var(--mk-raised);color:var(--mk-muted);font:11px var(--mk-mono)}
 .mk-search:focus-within .mk-kbd{display:none}
 .mk-select{border:0;border-radius:var(--mk-r-sm);padding:5px 6px;background:var(--mk-raised);color:var(--mk-text);font:12px var(--mk-font)}
+.mk-multilist{margin-top:12px;max-height:260px;overflow:auto}
+.mk-multilist .mk-row{cursor:pointer}
 .mk-field{display:flex;align-items:center;gap:6px;color:var(--mk-muted);font-size:12px}
 .mk-list{display:none;margin-top:6px;padding-top:6px;max-height:300px;overflow:auto;border-top:1px solid var(--mk-line)}
 .mk-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--mk-r-sm);cursor:pointer}
@@ -86,7 +88,7 @@ export const CSS = `
 .mk-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mk-meta{flex:none;color:var(--mk-muted);font-size:12px;font-variant-numeric:tabular-nums}
 .mk-empty{padding:6px 8px;color:var(--mk-muted)}
-.mk-bubble{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:none;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;pointer-events:none;z-index:6}
+.mk-bubble{position:fixed;bottom:74px;left:50%;transform:translateX(-50%);display:none;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;pointer-events:none;z-index:6}
 .mk-dot{width:8px;height:8px;border-radius:50%;background:var(--mk-ok)}
 .mk-bubble[data-state=working] .mk-dot{background:var(--mk-accent);animation:mk-pulse 1.4s ease-in-out infinite}
 @keyframes mk-pulse{50%{opacity:.3;transform:scale(.8)}}
@@ -107,7 +109,14 @@ export const CSS = `
 @keyframes mk-breath{0%,100%{opacity:.35;transform:scale(2)}50%{opacity:.12;transform:scale(1.15)}}
 @keyframes mk-breath-out{from{opacity:var(--o0,.35);transform:scale(var(--s0,2))}to{opacity:0;transform:scale(0)}}
 @keyframes mk-agent-out{0%,35%{opacity:1;transform:none}100%{opacity:0;transform:translateY(-4px) scale(.96)}}
-@media (prefers-reduced-motion:reduce){.mk-dot,.mk-agent,.mk-agent *{animation:none!important}.mk *{transition:none!important}.mk-agent[data-phase=loop] .mk-halo{transform:scale(1.6)}}
+.mk-aura{position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;box-shadow:inset 0 0 0 2px #a78bfab3,inset 0 0 40px 4px #a78bfa66,inset 0 0 140px 24px #a78bfa2e}
+.mk-aura[data-phase=in]{animation:mk-aura-in 1s cubic-bezier(.2,.8,.2,1) both}
+.mk-aura[data-phase=loop]{opacity:1;animation:mk-aura-breath 3.2s ease-in-out infinite}
+.mk-aura[data-phase=out]{animation:mk-aura-out .9s ease-in both}
+@keyframes mk-aura-in{from{opacity:0;box-shadow:inset 0 0 0 0 #a78bfa00,inset 0 0 0 0 #a78bfa00,inset 0 0 0 0 #a78bfa00}to{opacity:1;box-shadow:inset 0 0 0 2px #a78bfab3,inset 0 0 40px 4px #a78bfa66,inset 0 0 140px 24px #a78bfa2e}}
+@keyframes mk-aura-breath{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes mk-aura-out{from{opacity:var(--o0,1)}to{opacity:0;box-shadow:inset 0 0 0 0 #a78bfa00,inset 0 0 0 0 #a78bfa00,inset 0 0 0 0 #a78bfa00}}
+@media (prefers-reduced-motion:reduce){.mk-dot,.mk-agent,.mk-agent *,.mk-aura{animation:none!important}.mk *{transition:none!important}.mk-agent[data-phase=loop] .mk-halo{transform:scale(1.6)}.mk-aura[data-phase=loop]{opacity:.8}}
 `;
 
 export const ICONS: Record<string, string> = {

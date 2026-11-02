@@ -7,27 +7,30 @@ It is an independent project. It does not copy code, UI or assets from pen.dev.
 ## What it does
 
 **Viewing**
-- Opens `*.pen` files in a canvas. Mouse wheel scrolls, Shift+wheel scrolls sideways, Ctrl+wheel (or a trackpad pinch) zooms. The files are plain JSON; files saved by pen.dev can be encrypted, and Mokep cannot read those.
+- Opens `*.pen` files in a canvas. Mouse wheel scrolls, Shift+wheel scrolls sideways, Ctrl+wheel (or a trackpad pinch) zooms, and the middle button drags the screen. The files are plain JSON; files saved by pen.dev can be encrypted, and Mokep cannot read those.
 - Renders frames, shapes, fills, strokes, gradients (including mesh), effects, blend modes, text, icons, images, flex layout, components with overrides, variables and themes.
 - Never runs `script` nodes. They are shown as placeholders.
 - Designs are shown as still pictures. Animation inside a design is out of scope.
 
-**Two modes** (switch top left, or press `V` and `C`)
-- **View:** click a node to select it and see its info in a floating popup (name, type, id, position and size, main properties, all properties). Right-click a node for a small menu with **Comment** and **Copy id**; Comment switches to comment mode and opens the composer right there.
+**Two modes** (switch at the bottom centre, or press `V` and `C`)
+- **View:** click a node to select it and see its info in a floating popup (name, type, id, position and size, main properties, all properties). Right-click a node for a small menu with **Comment** and **Copy id**; Comment switches to comment mode and opens the composer right there. Drag with the left button to select several frames at once: every frame that lies completely inside the area is selected, but only the outermost ones (a parent stands for its children; when a parent sticks out of the area, its children inside the area are selected instead).
 - **Comment:** click a node and type a comment right there (Ctrl+Enter posts). The comments panel lists every comment of the file, numbers match the pins on the canvas, and you can resolve, reopen or delete them. Pins step aside for panels, the toolbar and the agent indicator, and a thin line shows which node a moved pin belongs to. The agent reads and answers them.
 
 **Around the canvas**
 - Search bar at the top (Ctrl+F) finds frames by name or id. The theme select next to it switches the design's own themes (for example `mode: light/dark`), not the extension's look.
 - Alt over a node measures the distance to the selected one.
+- Going to a frame (search, the agent's focus, the node name in a comment) flies the camera there: it pans, and zooms in or out as much as needed so every requested frame is completely on screen and clear of the floating panels. A long trip zooms out first so you keep your bearings. With reduced motion the camera jumps.
 - When the agent edits the file, moved nodes slide, new nodes fade in and changed nodes flash.
-- An indicator at the top right shows which agent is working and breathes while it is active.
+- The agent can ask what you are looking at (zoom, visible area, frames on screen) and take a screenshot of exactly your current view.
+- While an agent works, a glow breathes around the whole screen and a label shows which agent and what it does. It stays on until the agent says it is done. When the agent flies the camera to frames, their borders breathe 5 times so you can find them.
 - Sidebar icon (activity bar) lists recently opened designs, with buttons to create a new design file or open an existing one.
 
 ## Agent tools (MCP)
 
-`mokep_read`, `mokep_edit`, `mokep_lint`, `mokep_open`, `mokep_state`, `mokep_focus`, `mokep_screenshot`, `mokep_status`, `mokep_comments` and `mokep_comment`.
+`mokep_read`, `mokep_edit`, `mokep_lint`, `mokep_open`, `mokep_state`, `mokep_focus`, `mokep_screenshot`, `mokep_selection`, `mokep_status`, `mokep_comments` and `mokep_comment`.
 
 - The tools only work on `.pen` files.
+- `mokep_selection` returns what you have selected in the viewer (one node, or the frames of a drag selection), and `mokep_state` lists the selected ids. `mokep_focus` takes `nodeIds` to show several frames together.
 - Edits are written atomically and validated (ids and refs). An edit is blocked while the file has uncommitted git changes, unless the agent acknowledges it. Undo is done with git.
 - Screenshots come from the open viewer, so `mokep_screenshot` only works while the file is open in VS Code.
 - Each VS Code window runs its own bridge on `127.0.0.1`, protected by a token, and writes a file in `~/.mokep/bridges/`. The MCP server talks to the window that has the file open, or else to the window you used last.

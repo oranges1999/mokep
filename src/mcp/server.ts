@@ -11,7 +11,15 @@ import { existsSync } from "node:fs";
 import { callBridge } from "./client";
 import { assertPen, gitDirty, readDoc, writeAtomic } from "./files";
 
-const server = new McpServer({ name: "mokep", version: "0.0.1" });
+const INSTRUCTIONS = [
+  "Mokep shows the design to the user while you work on it.",
+  "While you are working, a glow breathes around the user's screen and stays on until you say you are done.",
+  "When you have completely finished, with no more Mokep calls to make, call mokep_status once with state \"idle\" and a short summary (an empty text also works) so the glow can turn off.",
+  "While you work you can call mokep_status with state \"working\" and a short text, so the user can read what you are doing.",
+  "To show the user where the frames you mention are, call mokep_focus with their ids (nodeIds for several): the camera flies there and the frames' outlines breathe for a few seconds.",
+].join(" ");
+
+const server = new McpServer({ name: "mokep", version: "0.0.1" }, { instructions: INSTRUCTIONS });
 
 // Tell the viewer which agent is acting, on every tool call. The agent name comes from the MCP client handshake.
 // shortcut: fire-and-forget over one socket per call and a wrapper typed loosely, upgrade if tool volume grows.
@@ -86,23 +94,39 @@ server.registerTool("mokep_open", { description: "Open a .pen file in Mokep.", i
   try { await callBridge({ type: "open", file: resolve(file) }); return text("Opened."); } catch (e) { return fail((e as Error).message); }
 });
 
-server.registerTool("mokep_state", { description: "Which .pen files are open in the viewer, which is active, frames and render warnings.", inputSchema: {} }, async () => {
+server.registerTool("mokep_state", { description: "Which .pen files are open in the viewer, which is active, its frames, the selection, render warnings, and `view`: zoom, the visible area and which frames are on screen (with visiblePct) right now.", inputSchema: {} }, async () => {
   try { const r = await callBridge({ type: "state" }); return text(JSON.stringify(r, null, 1)); } catch (e) { return fail((e as Error).message); }
 });
 
 server.registerTool("mokep_focus", {
-  description: "Pan and zoom the viewer to a node so the user sees it.",
-  inputSchema: { nodeId: z.string(), file: z.string().optional() },
-}, async ({ nodeId, file }) => {
-  try { await callBridge({ type: "focus", nodeId, file: file && resolve(file) }); return text("Focused."); } catch (e) { return fail((e as Error).message); }
+  description: "Fly the viewer to one or more nodes so the user sees them. The camera pans and zooms in or out until every node is completely on screen, and the call returns when it has arrived. Then the nodes' outlines breathe for a few seconds so the user can see where they are. Give nodeIds to show several frames together, or nodeId for one.",
+  inputSchema: { nodeId: z.string().optional(), nodeIds: z.array(z.string()).min(1).optional(), file: z.string().optional() },
+}, async ({ nodeId, nodeIds, file }) => {
+  const ids = nodeIds ?? (nodeId ? [nodeId] : []);
+  if (!ids.length) return fail("give nodeId or nodeIds");
+  try { await callBridge({ type: "focus", nodeIds: ids, file: file && resolve(file) }); return text(ids.length > 1 ? `Flew to ${ids.length} nodes, all in view.` : "Focused."); } catch (e) { return fail((e as Error).message); }
+});
+
+server.registerTool("mokep_selection", {
+  description: "What the user has selected in the viewer right now: one node, or the frames of a drag selection. Returns those nodes themselves (depth limits nested children). Use it when the user says \"this frame\" or \"the selected frames\".",
+  inputSchema: { file: z.string().optional(), depth: z.number().int().min(0).max(20).optional() },
+}, async ({ file, depth }) => {
+  try {
+    const r = await callBridge({ type: "selection", file: file && resolve(file) });
+    const ids = (r.ids as string[] | undefined) ?? [];
+    if (!ids.length) return text("Nothing is selected in the viewer.");
+    const doc = readDoc(String(r.file));
+    const selected = ids.map((id) => { const n = find(doc.children, id); return n ? elide(n, depth ?? 2) : { id, note: "part of a component instance, it is not stored as a node of its own" }; });
+    return text(JSON.stringify({ file: r.file, selected }, null, 1));
+  } catch (e) { return fail((e as Error).message); }
 });
 
 server.registerTool("mokep_screenshot", {
-  description: "Render a node (or the whole document when nodeId is omitted) to PNG from the open viewer. Only works while the viewer has the file open.",
-  inputSchema: { nodeId: z.string().optional(), file: z.string().optional(), scale: z.number().min(0.1).max(4).optional() },
-}, async ({ nodeId, file, scale }) => {
+  description: "Render a node (or the whole document when nodeId is omitted) to PNG from the open viewer. Without scale the longest side is at most 1568 px (fast); pass scale only when you need more detail. With view true it captures exactly what the user sees on screen right now (ignores nodeId). Only works while the viewer has the file open.",
+  inputSchema: { nodeId: z.string().optional(), file: z.string().optional(), scale: z.number().min(0.1).max(4).optional(), view: z.boolean().optional() },
+}, async ({ nodeId, file, scale, view }) => {
   try {
-    const r = await callBridge({ type: "screenshot", nodeId, file: file && resolve(file), scale }, 40000);
+    const r = await callBridge({ type: "screenshot", nodeId, file: file && resolve(file), scale, view }, 40000);
     return { content: [{ type: "image" as const, data: String(r.png), mimeType: "image/png" }] };
   } catch (e) { return fail((e as Error).message); }
 });
@@ -141,7 +165,7 @@ server.registerTool("mokep_comment", {
 });
 
 server.registerTool("mokep_status", {
-  description: "Show a status bubble in the viewer so the user sees what you are doing. state working stays until cleared, idle auto-hides. Empty text clears it.",
+  description: "Tell the user what you are doing. state working shows the text and keeps the glow around the screen on. state idle, or an empty text, means you are completely done: the text shows for a few seconds and the glow breathes out. Call it with idle when you finish.",
   inputSchema: { text: z.string(), state: z.enum(["working", "idle"]).optional() },
 }, async ({ text: t, state }) => {
   try { await callBridge({ type: "status", text: t, state: state ?? "idle" }); return text("ok"); } catch (e) { return fail((e as Error).message); }

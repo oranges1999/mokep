@@ -1,5 +1,7 @@
 import "pixi.js/unsafe-eval"; // shader and uniform code without eval, so the webview CSP can drop 'unsafe-eval'
-import { Application, Container, Rectangle } from "pixi.js";
+import { Application, Container, Point, Rectangle } from "pixi.js";
+import { easeInOut, fitView, flight, flightMs, fromCamera, Insets, MAX_SCALE, MIN_SCALE, unionRect, View } from "../core/camera";
+import type { FrameBox, Rect } from "../core/select";
 import { parsePen } from "../core/parse";
 import { expandRefs } from "../core/instances";
 import { computeLayout, initLayout } from "../core/layout";
@@ -33,7 +35,7 @@ export class Viewer {
     this.app.stage.addChild(this.world);
     this.bindCamera(this.app.canvas);
     await initLayout();
-    this.app.ticker.add((t) => this.stepTweens(t.deltaMS));
+    this.app.ticker.add((t) => { this.stepTweens(t.deltaMS); this.stepFlight(t.deltaMS); });
   }
 
   private stepTweens(ms: number) {
@@ -141,30 +143,43 @@ export class Viewer {
     return { x: (b.x - this.world.x) / s, y: (b.y - this.world.y) / s, w: b.width / s, h: b.height / s };
   }
 
-  focusNode(id: string): boolean {
-    const b = this.worldBounds(id);
-    if (!b) return false;
-    this.fitRect(b.x, b.y, b.w, b.h, 80);
-    return true;
-  }
-
   /** PNG data URL of a node (or everything when id is omitted), rendered at `scale` regardless of the camera. */
-  async screenshot(id: string | undefined, scale = 1): Promise<string> {
+  async screenshot(id: string | undefined, scale?: number, view = false): Promise<string> {
     if (!this.scene) throw new Error("nothing loaded");
-    const saved = { s: this.world.scale.x, x: this.world.x, y: this.world.y };
+    this.finishFlight(); // the camera is saved and restored below, so it must not be moving
+    const saved ={ s: this.world.scale.x, x: this.world.x, y: this.world.y };
     try {
-      const b = id ? this.worldBounds(id) : (() => { const l = this.world.getLocalBounds(); return { x: l.x, y: l.y, w: l.width, h: l.height }; })();
+      const b = view ? this.viewRect() : id ? this.worldBounds(id) : (() => { const l = this.world.getLocalBounds(); return { x: l.x, y: l.y, w: l.width, h: l.height }; })();
       if (!b) throw new Error(`node "${id}" not found`);
+      // Without an explicit scale the longest side is capped at 1568 px: agents downscale larger pictures anyway, and a big PNG is slow to render and to send.
+      scale ??= Math.min(view ? saved.s : 1, 1568 / Math.max(b.w, b.h, 1));
       this.world.scale.set(1); this.world.position.set(0, 0);
       this.scene.rescale(scale);
       for (const t of this.scene.texts) t.resolution = Math.max(1, scale * (window.devicePixelRatio || 1));
-      const canvas = this.app.renderer.extract.canvas({ target: this.app.stage, frame: new Rectangle(b.x, b.y, Math.max(1, Math.ceil(b.w - 0.01)), Math.max(1, Math.ceil(b.h - 0.01))), resolution: scale, clearColor: "#ffffff" }) as HTMLCanvasElement;
+      const canvas = this.app.renderer.extract.canvas({ target: this.app.stage, frame: new Rectangle(b.x, b.y, Math.max(1, Math.ceil(b.w - 0.01)), Math.max(1, Math.ceil(b.h - 0.01))), resolution: scale, clearColor: view ? "#1e1e1e" : "#ffffff" }) as HTMLCanvasElement;
       return canvas.toDataURL("image/png");
     } finally {
       this.world.scale.set(saved.s); this.world.position.set(saved.x, saved.y);
       this.scene.rescale(saved.s);
       this.refreshText();
     }
+  }
+
+  /** The part of the design the user sees, in design coordinates. */
+  viewRect() {
+    const s = this.world.scale.x;
+    return { x: -this.world.x / s, y: -this.world.y / s, w: this.app.screen.width / s, h: this.app.screen.height / s };
+  }
+
+  /** What is on screen: zoom, the visible area, and each frame that shows (with the share of it that is visible). */
+  view() {
+    const r = this.viewRect(), visible: { id: string; name: string; visiblePct: number }[] = [];
+    for (const [id, f] of this.scene?.frames.entries() ?? []) {
+      const w = Math.min(r.x + r.w, f.box.x + f.box.w) - Math.max(r.x, f.box.x), h = Math.min(r.y + r.h, f.box.y + f.box.h) - Math.max(r.y, f.box.y);
+      if (w > 0 && h > 0) visible.push({ id, name: f.node.name ?? id, visiblePct: Math.round((100 * w * h) / Math.max(1, f.box.w * f.box.h)) });
+    }
+    const round = (n: number) => Math.round(n * 10) / 10;
+    return { zoom: Math.round(this.world.scale.x * 1000) / 1000, area: { x: round(r.x), y: round(r.y), w: round(r.w), h: round(r.h) }, visible };
   }
 
   info() {
@@ -197,6 +212,7 @@ export class Viewer {
   private bindCamera(el: HTMLCanvasElement) {
     el.addEventListener("wheel", (e) => {
       e.preventDefault();
+      this.cancelFlight(); // the user took over the camera
       // Plain wheel scrolls, Shift scrolls sideways, Ctrl (or a trackpad pinch, which sets ctrlKey) zooms.
       if (!e.ctrlKey && !e.metaKey) {
         // shortcut: assumes pixel deltas, a line-based wheel (deltaMode 1) scrolls too little, upgrade if reported.
@@ -213,13 +229,90 @@ export class Viewer {
       this.world.position.set(px - wx * s, py - wy * s);
       this.scheduleTextRes();
     }, { passive: false });
+    // The middle button pans the screen. The left button is for selecting (see ui.ts).
     let drag: { x: number; y: number } | null = null;
-    el.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY }; el.setPointerCapture(e.pointerId); });
+    el.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); }); // no autoscroll cursor on the middle button
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 1) return;
+      this.cancelFlight();
+      drag = { x: e.clientX, y: e.clientY };
+      el.setPointerCapture(e.pointerId);
+    });
     el.addEventListener("pointermove", (e) => {
       if (!drag) return;
       this.world.x += e.clientX - drag.x; this.world.y += e.clientY - drag.y;
       drag = { x: e.clientX, y: e.clientY };
     });
-    el.addEventListener("pointerup", () => { drag = null; });
+    el.addEventListener("pointerup", (e) => { if (e.button === 1) drag = null; });
+  }
+
+  // ---- camera flights -------------------------------------------------------
+  /** Floating UI the camera must keep clear of. The UI sets this; it is read at the start of every flight. */
+  insets: () => Insets = () => ({ left: 0, top: 0, right: 0, bottom: 0 });
+  private flying: { fl: ReturnType<typeof flight>; to: View; ms: number; t: number; done: () => void } | null = null;
+  get isFlying() { return this.flying !== null; }
+
+  /** Flies the camera so that all the nodes are completely on screen: it pans, and zooms in or out as much as needed.
+   *  Resolves when the camera arrives (at once with reduced motion) or when something else takes the camera over.
+   *  Nothing moves if any id is unknown. */
+  focusNodes(ids: string[]): Promise<{ ok: boolean; missing: string[] }> {
+    const rects = ids.map((id) => ({ id, r: this.worldBounds(id) }));
+    const missing = rects.filter((x) => !x.r).map((x) => x.id);
+    if (missing.length || !rects.length) return Promise.resolve({ ok: false, missing: missing.length ? missing : ids });
+    const sw = this.app.screen.width, sh = this.app.screen.height;
+    const to = fitView(unionRect(rects.map((x) => x.r!))!, sw, sh, this.insets());
+    this.cancelFlight();
+    const fl = flight(fromCamera(this.world.scale.x, this.world.x, this.world.y, sw, sh), to);
+    const reduced = !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || fl.S < 0.02) { this.applyView(to); return Promise.resolve({ ok: true, missing: [] }); }
+    return new Promise((resolve) => { this.flying = { fl, to, ms: flightMs(fl.S), t: 0, done: () => resolve({ ok: true, missing: [] }) }; });
+  }
+
+  private applyView(v: View) {
+    const sw = this.app.screen.width, sh = this.app.screen.height;
+    const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, sw / v.w)); // a very long trip would zoom out past the limit
+    this.world.scale.set(scale);
+    this.world.position.set(sw / 2 - v.cx * scale, sh / 2 - v.cy * scale);
+    this.scheduleTextRes();
+  }
+
+  private stepFlight(ms: number) {
+    const f = this.flying;
+    if (!f) return;
+    f.t += ms;
+    const k = Math.min(1, f.t / f.ms);
+    this.applyView(k >= 1 ? f.to : f.fl.at(f.fl.S * easeInOut(k)));
+    if (k >= 1) { this.flying = null; f.done(); }
+  }
+
+  /** Stops where the camera is (the user took over, or a new flight starts). */
+  cancelFlight() { const f = this.flying; if (f) { this.flying = null; f.done(); } }
+
+  /** Jumps to the end of the flight (a screenshot needs a settled camera). */
+  private finishFlight() { const f = this.flying; if (f) { this.flying = null; this.applyView(f.to); f.done(); } }
+
+  /** The node's own rectangle in world coordinates, without children that stick out of it. */
+  ownBounds(id: string): Rect | null {
+    const c = this.scene?.nodes.get(id), b = this.scene?.boxes.get(id);
+    if (!c || !b) return null;
+    const pts = [[0, 0], [b.w, 0], [0, b.h], [b.w, b.h]].map(([x, y]) => this.world.toLocal(c.toGlobal(new Point(x, y))));
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  }
+
+  /** Every frame with its own box and the frames above it, for the marquee. */
+  frameBoxes(): FrameBox[] {
+    const sc = this.scene;
+    if (!sc) return [];
+    const out: FrameBox[] = [];
+    for (const [id, n] of sc.data) {
+      if (n.type !== "frame") continue;
+      const r = this.ownBounds(id);
+      if (!r) continue;
+      const ancestors: string[] = [];
+      for (let p = sc.nodes.get(id)!.parent; p; p = p.parent) { const pid = sc.ids.get(p as Container); if (pid && sc.data.get(pid)?.type === "frame") ancestors.push(pid); }
+      out.push({ id, ...r, ancestors });
+    }
+    return out;
   }
 }

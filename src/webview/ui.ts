@@ -2,6 +2,8 @@ import type { Comment } from "../core/comments";
 import { defaultTheme } from "../core/variables";
 import { AgentPresence } from "./agents";
 import { abs, cap, CSS, h, icon, ICONS, reduceMotion } from "./ui-kit";
+import type { Insets } from "../core/camera";
+import { outermostEnclosed, rectBetween } from "../core/select";
 import { Viewer } from "./viewer";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -48,6 +50,18 @@ export class Ui {
   private composing: string | null = null;
   private menu = h("div", "mk mk-card mk-menu");
   private menuFor: string | null = null;
+  /** A marquee selection of two or more frames. One selected node lives in `selected`. */
+  private multi: string[] = [];
+  private drag: { x: number; y: number } | null = null;
+  private marqueeOn = false;
+  private marqueeEl = abs("position:absolute;display:none;border:1px solid #6ea8ff;background:#6ea8ff1f;box-sizing:border-box");
+  private multiLayer = abs("position:absolute;inset:0");
+  /** Outlines that breathe around the frames the camera has just flown to. */
+  private locateLayer = abs("position:absolute;inset:0");
+  private locating: { ids: string[]; t0: number } | null = null;
+  /** How many breaths the outline takes and how long one breath is. Public so tests can shorten them. */
+  locateBeats = 5;
+  locatePeriodMs = 1200;
   private emptyEl = h("div", "mk mk-emptystate", h("b", "", "This design is empty"), "Ask your agent to add a frame, and it appears here.");
 
   constructor(private v: Viewer, host: HTMLElement, private send: Send) {
@@ -66,7 +80,7 @@ export class Ui {
       else if (e.key === "Enter") { this.goTo(this.findHits[this.findIdx]); e.preventDefault(); }
       else if (e.key === "Escape") { this.closeFind(); e.stopPropagation(); }
     });
-    this.overlay.append(this.flashLayer, this.hovBox, this.selBox, this.measure, this.pins);
+    this.overlay.append(this.flashLayer, this.multiLayer, this.locateLayer, this.hovBox, this.selBox, this.marqueeEl, this.measure, this.pins);
     this.cLauncher.setAttribute("aria-expanded", "false");
     this.cLauncher.addEventListener("click", () => this.toggleComments());
     this.modeView.dataset.kind = "view";
@@ -77,29 +91,42 @@ export class Ui {
     this.modeComment.setAttribute("aria-pressed", "false");
     this.modeView.addEventListener("click", () => this.setMode("view"));
     this.modeComment.addEventListener("click", () => this.setMode("comment"));
-    document.body.append(this.overlay, this.popup, this.findBox, this.bubble, this.agents.el, this.modesBox, this.cLauncher, this.cPanel, this.composer, this.menu, this.emptyEl);
+    document.body.append(this.overlay, this.agents.aura, this.popup, this.findBox, this.bubble, this.agents.el, this.modesBox, this.cLauncher, this.cPanel, this.composer, this.menu, this.emptyEl);
     host.style.right = "0";
     const el = v.app.canvas;
-    let down: { x: number; y: number } | null = null;
-    el.addEventListener("pointerdown", (e) => { down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null; this.closeMenu(); });
+    v.insets = () => this.insets();
+    // Left button: a click selects (View) or starts a comment (Comment); a drag in View mode draws a selection area.
+    // The middle button pans (viewer.ts) and the right button opens the menu.
+    el.addEventListener("pointerdown", (e) => {
+      this.closeMenu();
+      this.drag = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+      if (this.drag) try { el.setPointerCapture(e.pointerId); } catch { /* synthetic events have no active pointer */ }
+    });
     el.addEventListener("wheel", () => this.closeMenu(), { passive: true }); // the menu would be left behind by the scroll
     // Left click selects (View) or starts a comment (Comment). The menu belongs to the right button only.
     el.addEventListener("pointerup", (e) => {
-      if (e.button === 0 && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 4) {
+      const from = this.drag;
+      this.drag = null;
+      if (e.button !== 0 || !from) return;
+      if (this.marqueeOn) return this.endMarquee(from, e);
+      if (Math.hypot(e.clientX - from.x, e.clientY - from.y) < 4) {
         const id = this.pick(e.clientX, e.clientY);
         if (this.mode === "comment") { if (id) this.openComposer(id, e.clientX, e.clientY); else this.closeComposer(); }
         else this.select(id);
       }
-      down = null;
     });
+    el.addEventListener("pointercancel", () => { this.cancelMarquee(); this.drag = null; });
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault(); // no browser or VS Code menu on the canvas
       const id = this.pick(e.clientX, e.clientY);
       if (!id) return this.closeMenu();
-      if (this.mode === "view") this.select(id);
+      if (this.mode === "view" && !this.multi.includes(id)) this.select(id); // a right click inside a selection keeps it
       this.openMenu(id, e.clientX, e.clientY);
     });
-    el.addEventListener("pointermove", (e) => { this.hovered = this.pick(e.clientX, e.clientY); });
+    el.addEventListener("pointermove", (e) => {
+      this.hovered = this.marqueeOn ? null : this.pick(e.clientX, e.clientY);
+      if (this.drag && this.mode === "view" && (this.marqueeOn || Math.hypot(e.clientX - this.drag.x, e.clientY - this.drag.y) >= 4)) this.dragMarquee(this.drag, e);
+    });
     el.addEventListener("pointerleave", () => { this.hovered = null; });
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); return; }
@@ -109,12 +136,17 @@ export class Ui {
         if (e.key === "v") this.setMode("view");
         else if (e.key === "c") this.setMode("comment");
       }
-      if (e.key === "Escape" && !typing) { if (this.menuFor) this.closeMenu(); else if (this.composing) this.closeComposer(); else if (this.mode === "comment") this.setMode("view"); else this.select(null); }
+      if (e.key === "Escape" && !typing) { if (this.marqueeOn) { this.cancelMarquee(); this.drag = null; } else if (this.menuFor) this.closeMenu(); else if (this.composing) this.closeComposer(); else if (this.mode === "comment") this.setMode("view"); else this.select(null); }
     });
     window.addEventListener("keyup", (e) => { if (e.key === "Alt") this.alt = false; });
     window.addEventListener("blur", () => { this.alt = false; });
     v.app.ticker.add(() => this.frame());
-    v.onLoaded = () => { if (this.selected && !v.scene?.nodes.has(this.selected)) this.selected = null; this.render(); };
+    v.onLoaded = () => {
+      const alive = (id: string) => !!v.scene?.nodes.has(id);
+      if (this.selected && !alive(this.selected)) this.selected = null;
+      if (this.multi.length) { this.multi = this.multi.filter(alive); if (this.multi.length < 2) { this.selected = this.multi[0] ?? null; this.multi = []; } }
+      this.render();
+    };
     this.render();
   }
 
@@ -136,7 +168,56 @@ export class Ui {
     return best?.id ?? null;
   }
 
-  select(id: string | null) { this.selected = id; this.render(); }
+  select(id: string | null) { this.selected = id; this.multi = []; this.render(); }
+
+  /** The marquee result: nothing clears the selection, one frame is an ordinary selection, several are a multi-selection. */
+  selectMany(ids: string[]) {
+    if (ids.length < 2) return this.select(ids[0] ?? null);
+    this.selected = null;
+    this.multi = ids;
+    this.render();
+  }
+
+  /** Ids of what is selected right now: none, one, or the frames of the marquee. */
+  selection(): string[] { return this.multi.length ? [...this.multi] : this.selected ? [this.selected] : []; }
+
+  // ---- selection area (drag with the left button in View mode) --------------
+  private dragMarquee(from: { x: number; y: number }, e: PointerEvent) {
+    this.marqueeOn = true;
+    const r = rectBetween(from, { x: e.clientX, y: e.clientY });
+    Object.assign(this.marqueeEl.style, { display: "block", left: r.x + "px", top: r.y + "px", width: r.w + "px", height: r.h + "px" });
+  }
+
+  private endMarquee(from: { x: number; y: number }, e: PointerEvent) {
+    const cr = this.v.app.canvas.getBoundingClientRect(), w = this.v.world, s = w.scale.x;
+    const r = rectBetween({ x: from.x - cr.left, y: from.y - cr.top }, { x: e.clientX - cr.left, y: e.clientY - cr.top });
+    this.cancelMarquee();
+    this.selectMany(outermostEnclosed(this.v.frameBoxes(), { x: (r.x - w.x) / s, y: (r.y - w.y) / s, w: r.w / s, h: r.h / s }));
+  }
+
+  private cancelMarquee() { this.marqueeOn = false; this.marqueeEl.style.display = "none"; }
+
+  private drawMulti() {
+    this.multiLayer.replaceChildren(...(this.mode === "view" ? this.multi : []).flatMap((id) => {
+      const r = this.rectOf(id);
+      if (!r) return [];
+      const b = this.toScreen(r);
+      return [abs(`position:absolute;left:${b.x}px;top:${b.y}px;width:${b.w}px;height:${b.h}px;border:2px solid #6ea8ff;box-sizing:border-box`)];
+    }));
+  }
+
+  /** The part of the screen the floating panels cover, so a camera flight keeps its target clear of them. */
+  private insets(): Insets {
+    const shown = (e: HTMLElement) => e.getClientRects().length > 0;
+    const W = window.innerWidth, H = window.innerHeight;
+    const bottomEdge = Math.min(this.modesBox.offsetTop, shown(this.bubble) ? this.bubble.offsetTop : H);
+    return {
+      left: shown(this.popup) ? this.popup.offsetLeft + this.popup.offsetWidth + 12 : 0,
+      right: shown(this.cPanel) ? W - this.cPanel.offsetLeft + 12 : 0,
+      top: this.findBox.offsetTop + this.findBox.offsetHeight + 12,
+      bottom: H - bottomEdge + 12,
+    };
+  }
 
   // ---- modes and the comment composer -------------------------------------
   // ---- right-click menu: what you can do with the node under the pointer ----
@@ -265,9 +346,9 @@ export class Ui {
 
   private goTo(id: string | undefined) {
     if (!id) return;
-    this.v.focusNode(id);
+    this.closeFind(); // first, so the camera sees the screen as it will be
     this.select(id);
-    this.closeFind();
+    void this.flyTo([id]);
   }
 
   // ---- geometry -----------------------------------------------------------
@@ -289,6 +370,8 @@ export class Ui {
     this.drawMeasure();
     this.drawPins();
     this.drawFlashes();
+    this.drawMulti();
+    this.drawLocate();
   }
 
   private drawMeasure() {
@@ -335,6 +418,29 @@ export class Ui {
       const s = this.toScreen(r);
       const o = Math.max(0, 1 - (now - f.t0) / 1600);
       return [abs(`position:absolute;left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px;border:2px solid #a78bfa;background:#a78bfa26;box-sizing:border-box;opacity:${o}`)];
+    }));
+  }
+
+  /** Flies the camera to the nodes, and once it has arrived their outlines breathe for a few beats so you can see where they are. */
+  async flyTo(ids: string[]) {
+    const r = await this.v.focusNodes(ids);
+    if (r.ok) this.locating = { ids, t0: performance.now() };
+    return r;
+  }
+
+  private drawLocate() {
+    const L = this.locating;
+    if (!L) return;
+    const t = performance.now() - L.t0, total = this.locateBeats * this.locatePeriodMs, fade = 500;
+    if (t > total + fade) { this.locating = null; this.locateLayer.replaceChildren(); return; }
+    // Starts bright, dims to a tenth and comes back, once per beat; reduced motion keeps it steady. The last beat fades out.
+    const breath = reduceMotion() ? 1 : 0.55 + 0.45 * Math.cos((2 * Math.PI * t) / this.locatePeriodMs);
+    const o = Math.max(0, Math.min(1, breath)) * (t > total ? Math.max(0, 1 - (t - total) / fade) : 1);
+    this.locateLayer.replaceChildren(...L.ids.flatMap((id) => {
+      const r = this.v.ownBounds(id) ?? this.rectOf(id);
+      if (!r) return [];
+      const b = this.toScreen(r);
+      return [abs(`position:absolute;left:${b.x}px;top:${b.y}px;width:${b.w}px;height:${b.h}px;box-sizing:border-box;border:3px solid #6ea8ff;border-radius:2px;box-shadow:0 0 0 1px #6ea8ff66,0 0 28px 4px #6ea8ff88;opacity:${o}`)];
     }));
   }
 
@@ -412,6 +518,7 @@ export class Ui {
   setStatus(text: string, state: "working" | "idle" | string) {
     clearTimeout(this.bubbleTimer);
     if (!text) { this.agents.endAll(); this.bubble.style.display = "none"; return; }
+    if (state !== "working") this.agents.endAll(); // "idle" means the agent is completely done, so the glow around the screen breathes out
     const wasHidden = this.bubble.style.display === "none" || !this.bubble.style.display;
     this.bubbleText.textContent = text;
     this.bubble.dataset.state = state === "working" ? "working" : "idle";
@@ -448,15 +555,35 @@ export class Ui {
   }
 
   private renderPopup() {
-    const n = this.mode === "view" && this.selected ? this.v.scene?.data.get(this.selected) : null;
+    const many = this.mode === "view" && this.multi.length > 1 ? this.multi : null;
+    const n = many ? null : this.mode === "view" && this.selected ? this.v.scene?.data.get(this.selected) : null;
     const p = this.popup;
-    if (!n) {
+    if (!n && !many) {
       if (!this.shownFor) return;
       this.shownFor = null;
       if (reduceMotion()) { p.style.display = "none"; return; }
       p.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(-16px) scale(.97)" }], { duration: 140, easing: "ease-in" }).onfinish = () => { if (!this.shownFor) p.style.display = "none"; };
       return;
     }
+    if (many) {
+      const closeAll = h("button", "mk-iconbtn", icon("close", 14));
+      closeAll.title = "Clear selection";
+      closeAll.setAttribute("aria-label", "Clear selection");
+      closeAll.addEventListener("click", () => this.select(null));
+      const rows = many.map((id) => {
+        const f = this.v.scene?.data.get(id), box = this.v.ownBounds(id);
+        const row = h("div", "mk-row", icon("frame", 14), h("span", "mk-name", f?.name ?? id), h("span", "mk-meta", box ? `${Math.round(box.w)} × ${Math.round(box.h)}` : ""));
+        row.addEventListener("click", () => this.select(id));
+        return row;
+      });
+      p.replaceChildren(
+        h("div", "mk-head", h("span", "mk-glyph", icon("frame", 16)), h("div", "mk-headtext", h("div", "mk-title", `${many.length} frames selected`), h("div", "mk-sub", "Drag again to change the selection")), closeAll),
+        h("div", "mk-multilist", ...rows),
+        h("div", "mk-hint", "Your agent can read this selection."),
+      );
+      return this.reveal("\0multi");
+    }
+    if (!n) return;
     const b = this.rectOf(n.id);
     const { children, ...props } = n as Record<string, any>;
     const json = JSON.stringify(props, null, 1);
@@ -491,9 +618,13 @@ export class Ui {
       h("details", "mk-details", h("summary", "", "All properties"), h("pre", "mk-pre", json.length > 2000 ? json.slice(0, 2000) + "\n…" : json)),
       h("div", "mk-hint", "Hold Alt over another node to measure the distance."),
     );
-    // Already open: the content was swapped above and that is all. Only a fresh open slides in.
-    const wasOpen = this.shownFor !== null;
-    this.shownFor = n.id;
+    this.reveal(n.id);
+  }
+
+  /** Already open: the content was swapped and that is all. Only a fresh open slides in. */
+  private reveal(key: string) {
+    const p = this.popup, wasOpen = this.shownFor !== null;
+    this.shownFor = key;
     p.style.display = "block";
     if (wasOpen || reduceMotion()) return;
     p.animate([{ opacity: 0, transform: "translateX(-16px) scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
@@ -538,7 +669,7 @@ export class Ui {
       if (c.author === "agent") badge.dataset.agent = "";
       badge.title = c.author === "agent" ? "Agent" : "You";
       const where = h("button", "mk-link", node ? (node.name ?? node.id) : "a deleted node");
-      if (node) where.addEventListener("click", () => { this.v.focusNode(c.nodeId); this.flash([c.nodeId]); });
+      if (node) where.addEventListener("click", () => { void this.flyTo([c.nodeId]); });
       else where.disabled = true;
       const done = h("button", "mk-link", c.resolved ? "Reopen" : "Resolve");
       done.addEventListener("click", () => this.send({ type: "resolveComment", id: c.id, resolved: !c.resolved }));

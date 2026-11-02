@@ -30,7 +30,15 @@ describe.skipIf(!existsSync(SERVER))("MCP server", () => {
 
   it("lists the tools", async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["mokep_comment", "mokep_comments", "mokep_edit", "mokep_focus", "mokep_lint", "mokep_open", "mokep_read", "mokep_screenshot", "mokep_state", "mokep_status"]);
+    expect(names).toEqual(["mokep_comment", "mokep_comments", "mokep_edit", "mokep_focus", "mokep_lint", "mokep_open", "mokep_read", "mokep_screenshot", "mokep_selection", "mokep_state", "mokep_status"]);
+  });
+  it("tells every agent how to end its run, so the glow around the screen turns off", async () => {
+    const text = client.getInstructions() ?? "";
+    expect(text).toMatch(/mokep_status/);
+    expect(text).toMatch(/idle/);
+    expect(text).toMatch(/mokep_focus/);
+    const status = (await client.listTools()).tools.find((t) => t.name === "mokep_status")!;
+    expect(status.description).toMatch(/idle/);
   });
   it("reads with depth elision", async () => {
     const top = await call("mokep_read", { file, depth: 0 });
@@ -77,6 +85,32 @@ describe.skipIf(!existsSync(SERVER))("MCP server", () => {
     const r = await call("mokep_state", {});
     expect(r.error).toBe(true);
     expect(r.text).toMatch(/not running/);
+  });
+  it("reads what the user has selected, and flies to several nodes at once", async () => {
+    const seen: any[] = [];
+    let ids: string[] = ["r", "inside/instance"];
+    const bridge = new BridgeServer(async (req) => { seen.push(req); return req.type === "selection" ? { ok: true, file, ids } : { ok: true }; });
+    await bridge.start();
+    try {
+      const sel = JSON.parse((await call("mokep_selection", {})).text);
+      expect(sel.file).toBe(file);
+      expect(sel.selected[0]).toMatchObject({ id: "r", type: "rectangle" });
+      expect(sel.selected[1].note).toMatch(/instance/); // an id that is not a node of the file is reported, not dropped
+      const shallow = JSON.parse((await call("mokep_selection", { depth: 0 })).text);
+      ids = ["f"];
+      expect(JSON.parse((await call("mokep_selection", { depth: 0 })).text).selected[0].children).toBe("..."); // depth is honoured
+      expect(shallow.selected).toHaveLength(2);
+      ids = [];
+      expect((await call("mokep_selection", {})).text).toBe("Nothing is selected in the viewer.");
+
+      expect((await call("mokep_focus", { nodeIds: ["f", "r"] })).error).toBe(false);
+      expect(seen.find((q) => q.type === "focus")).toMatchObject({ nodeIds: ["f", "r"] });
+      await call("mokep_focus", { nodeId: "r" });
+      expect(seen.filter((q) => q.type === "focus").at(-1)).toMatchObject({ nodeIds: ["r"] }); // a single id still works
+      const none = await call("mokep_focus", {});
+      expect(none.error).toBe(true);
+      expect(none.text).toMatch(/nodeId or nodeIds/);
+    } finally { bridge.stop(); }
   });
   it("tells the viewer which agent is acting and on which file", async () => {
     const seen: any[] = [];

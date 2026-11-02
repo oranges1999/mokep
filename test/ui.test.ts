@@ -209,10 +209,89 @@ describe.skipIf(!CHROME)("viewer UI", () => {
     await page.close();
   }, 60000);
 
+  it("the glow around the screen stays on for the whole run, ends when the agent says it is done, and cannot stay on for ever", async () => {
+    const page = await open();
+    const aura = () => page.evaluate(() => { const a = (window as any).__ui.agents; return { phase: a.aura.dataset.phase ?? "", pills: document.querySelectorAll(".mk-agent").length }; });
+    await page.evaluate(() => { (window as any).__ui.agents.holdMs = 4000; }); // shorten the fallback timer for the test
+    await page.evaluate(() => (window as any).__ui.setAgent("claude-code", "read"));
+    expect((await aura()).phase).toBe("in");
+    await page.waitForFunction(() => (window as any).__ui.agents.aura.dataset.phase === "loop", null, { timeout: 3500 });
+    for (let i = 0; i < 5; i++) { // the agent keeps working for longer than the fallback timer, with gaps in between
+      await page.waitForTimeout(900);
+      await page.evaluate(() => (window as any).__ui.setAgent("claude-code", "edit"));
+    }
+    expect(await aura()).toEqual({ phase: "loop", pills: 1 });
+    // The agent is completely done.
+    await page.evaluate(() => (window as any).__ui.setStatus("Finished 3 edits", "idle"));
+    expect((await aura()).phase).toBe("out");
+    await page.waitForFunction(() => !(window as any).__ui.agents.aura.dataset.phase && !document.querySelector(".mk-agent"), null, { timeout: 5000 });
+    // An agent that never says it is done still ends, after the fallback timer (it may still be breathing in by then on a slow machine).
+    await page.evaluate(() => (window as any).__ui.setAgent("claude-code", "read"));
+    await page.waitForFunction(() => !(window as any).__ui.agents.aura.dataset.phase && !document.querySelector(".mk-agent"), null, { timeout: 12000 });
+    await page.close();
+  }, 60000);
+
+  it("the glow covers the screen without blocking it, and breathes", async () => {
+    const page = await open();
+    await page.evaluate(() => (window as any).__ui.setAgent("claude-code", "read"));
+    await page.waitForFunction(() => (window as any).__ui.agents.aura.dataset.phase === "loop", null, { timeout: 4000 });
+    const r = await page.evaluate(async () => {
+      const a = (window as any).__ui.agents.aura as HTMLElement, box = a.getBoundingClientRect(), cs = getComputedStyle(a);
+      const seen: number[] = [];
+      for (let i = 0; i < 40; i++) { seen.push(+getComputedStyle(a).opacity); await new Promise((r) => setTimeout(r, 90)); }
+      return { full: box.x === 0 && box.y === 0 && box.width === innerWidth && box.height === innerHeight, clicks: cs.pointerEvents, shadow: cs.boxShadow, min: Math.min(...seen), max: Math.max(...seen) };
+    });
+    expect(r.full).toBe(true);
+    expect(r.clicks).toBe("none");
+    expect(r.shadow).toContain("inset");
+    expect(r.max).toBeGreaterThan(0.9);
+    expect(r.min).toBeLessThan(0.7); // it dims and comes back
+    await page.close();
+  }, 60000);
+
+  it("outlines breathe around the frames the camera flew to, for a few beats, and then go away", async () => {
+    const page = await open();
+    const r = await page.evaluate(async () => {
+      const ui = (window as any).__ui;
+      ui.locateBeats = 2; ui.locatePeriodMs = 300; // shortened for the test: two beats of 300 ms
+      const layer = ui.locateLayer as HTMLElement;
+      const before = layer.children.length;
+      const res = await ui.flyTo(["n6b", "nbu"]);
+      await new Promise<void>((r) => (window as any).__viewer.app.ticker.addOnce(() => r())); // the outlines are drawn on the next frame
+      const after = layer.children.length;
+      const seen: number[] = [];
+      let border = "";
+      for (let i = 0; i < 12; i++) { const c = layer.children[0] as HTMLElement | undefined; if (c) { seen.push(+c.style.opacity); border = c.style.borderTopWidth; } await new Promise((r) => setTimeout(r, 50)); }
+      await new Promise((r) => setTimeout(r, 1200)); // beats plus the fade
+      const bad = await ui.flyTo(["n6b", "ghost"]);
+      return { before, res, after, min: Math.min(...seen), max: Math.max(...seen), gone: layer.children.length, bad, border };
+    });
+    expect(r.before).toBe(0); // nothing while the camera is still flying
+    expect(r.res.ok).toBe(true);
+    expect(r.after).toBe(2); // one outline for each requested frame
+    expect(r.border).toBe("3px");
+    expect(r.max).toBeGreaterThan(0.7);
+    expect(r.min).toBeLessThan(0.35); // it dims and comes back
+    expect(r.gone).toBe(0);
+    expect(r.bad.ok).toBe(false);
+    await page.close();
+  }, 60000);
+
+  it("searching for a frame also marks where it is", async () => {
+    const page = await open();
+    await page.evaluate(() => { const ui = (window as any).__ui; ui.locateBeats = 3; });
+    await page.keyboard.press("Control+f");
+    await page.keyboard.type("05-layout");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => ((window as any).__ui.locateLayer as HTMLElement).children.length === 1, null, { timeout: 6000 });
+    await page.close();
+  }, 60000);
+
   it("reduced motion: no breathing, popup opens without animation", async () => {
     const page = await open({ reducedMotion: "reduce" });
     await page.evaluate(() => (window as any).__ui.setAgent("claude-code", "read"));
     expect(await page.evaluate(() => { const a = document.querySelector(".mk-agent")!; return { phase: a.getAttribute("data-phase"), halo: a.querySelector(".mk-halo")!.getAnimations().length }; })).toEqual({ phase: "loop", halo: 0 });
+    expect(await page.evaluate(() => { const a = (window as any).__ui.agents.aura as HTMLElement; return { phase: a.dataset.phase, animations: a.getAnimations().length }; })).toEqual({ phase: "loop", animations: 0 }); // a steady glow
     await click(page, "n6");
     await page.waitForFunction(() => getComputedStyle(document.querySelector(".mk-popup")!).display === "block");
     expect(await page.evaluate(() => document.querySelector(".mk-popup")!.getAnimations().length)).toBe(0);
@@ -234,6 +313,191 @@ describe.skipIf(!CHROME)("viewer UI", () => {
     expect(r.empty.scale).toBeLessThan(5);
     expect(r.shown).toBe("none");
     expect(r.inView).toBe(true);
+    await page.close();
+  }, 60000);
+
+  it("the mode switch sits bottom centre with the status bubble just above it, and nothing overlaps", async () => {
+    const page = await open();
+    await page.evaluate(() => (window as any).__ui.setStatus("Agent is editing", "working"));
+    const r = await page.evaluate(() => {
+      const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const m = box(".mk-modes"), b = box(".mk-bubble"), W = innerWidth, H = innerHeight;
+      return { modesCentred: Math.abs(m.left + m.width / 2 - W / 2) < 2, modesBottomGap: Math.round(H - m.bottom), bubbleCentred: Math.abs(b.left + b.width / 2 - W / 2) < 2, bubbleAbove: b.bottom <= m.top, overlap: b.bottom > m.top && b.top < m.bottom };
+    });
+    expect(r.modesCentred).toBe(true);
+    expect(r.modesBottomGap).toBeLessThan(40);
+    expect(r.bubbleCentred).toBe(true);
+    expect(r.bubbleAbove).toBe(true);
+    expect(r.overlap).toBe(false);
+    await page.close();
+  }, 60000);
+
+  // ---- selection area, panning and camera flights -----------------------------
+  /** A node's own rectangle on screen. */
+  const screenRect = (page: Page, id: string) => page.evaluate((nid) => { const v = (window as any).__viewer, b = v.ownBounds(nid), s = v.world.scale.x; return { x: b.x * s + v.world.x, y: b.y * s + v.world.y, w: b.w * s, h: b.h * s }; }, id);
+  const dragMouse = async (page: Page, a: { x: number; y: number }, b: { x: number; y: number }) => { await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 8 }); await page.mouse.up(); };
+  const selection = (page: Page) => page.evaluate(() => ((window as any).__ui.selection() as string[]).slice().sort());
+  const camera = (page: Page) => page.evaluate(() => { const w = (window as any).__viewer.world; return { x: w.x, y: w.y, s: w.scale.x }; });
+  /** World point to screen point, with the camera as it is now. */
+  const toScreen = (page: Page, x: number, y: number) => page.evaluate(([wx, wy]) => { const v = (window as any).__viewer, s = v.world.scale.x; return { x: wx * s + v.world.x, y: wy * s + v.world.y }; }, [x, y]);
+
+  it("the node's own rectangle matches its layout box", async () => {
+    const page = await open();
+    const r = await page.evaluate(() => { const v = (window as any).__viewer, f = v.scene.frames.get("n1a").box, o = v.ownBounds("n1a"); return { f, o }; });
+    expect(r.o.x).toBeCloseTo(r.f.x, 1); expect(r.o.y).toBeCloseTo(r.f.y, 1); expect(r.o.w).toBeCloseTo(r.f.w, 1); expect(r.o.h).toBeCloseTo(r.f.h, 1);
+    await page.close();
+  }, 60000);
+
+  it("dragging with the left button selects the outermost frames that fit completely inside", async () => {
+    const page = await open();
+    await page.evaluate(() => (window as any).__viewer.fitAll());
+    const a = await screenRect(page, "n1a"), b = await screenRect(page, "n2f");
+    // Around the first two pages and nothing else: both are selected, their cards are not (the pages stand for them).
+    await dragMouse(page, { x: a.x - 14, y: a.y - 14 }, { x: b.x + b.w + 14, y: b.y + b.h + 14 });
+    expect(await selection(page)).toEqual(["n1a", "n2f"]);
+    expect(await page.evaluate(() => document.querySelector(".mk-popup .mk-title")!.textContent)).toBe("2 frames selected");
+    expect(await page.evaluate(() => document.querySelectorAll(".mk-multilist .mk-row").length)).toBe(2);
+    await page.waitForFunction(() => (window as any).__ui.multiLayer.children.length === 2); // a blue box on each
+    expect(await display(page, ".mk-menu")).toBe("none");
+    await page.close();
+  }, 60000);
+
+  it("a drag selects the cards inside a page when the page itself does not fit, and cuts at the edge of the area", async () => {
+    const page = await open();
+    await page.evaluate(() => (window as any).__viewer.focusNodes(["n1a"]));
+    await page.waitForFunction(() => !(window as any).__viewer.isFlying);
+    const from = await toScreen(page, 1230, 30), all = await toScreen(page, 1800, 220), cut = await toScreen(page, 1700, 220);
+    await dragMouse(page, from, all); // the first three cells of the first row are completely inside, 01-shapes is not
+    expect((await selection(page)).length).toBe(3);
+    await dragMouse(page, from, cut); // the third cell is cut by the edge of the area
+    expect((await selection(page)).length).toBe(2);
+    await dragMouse(page, { x: 5, y: 200 }, { x: 25, y: 220 }); // an area with nothing completely inside clears the selection
+    expect(await selection(page)).toEqual([]);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".mk-popup")!).display === "none"); // after its closing animation
+    await page.close();
+  }, 60000);
+
+  it("the left button no longer pans; the middle button does", async () => {
+    const page = await open();
+    const before = await camera(page);
+    await dragMouse(page, { x: 700, y: 450 }, { x: 760, y: 500 });
+    expect(await camera(page)).toEqual(before);
+    await page.mouse.move(700, 450);
+    await page.mouse.down({ button: "middle" });
+    await page.mouse.move(800, 520, { steps: 6 });
+    await page.mouse.up({ button: "middle" });
+    const after = await camera(page);
+    expect(after.x - before.x).toBeCloseTo(100, 0);
+    expect(after.y - before.y).toBeCloseTo(70, 0);
+    expect(after.s).toBe(before.s);
+    await page.close();
+  }, 60000);
+
+  it("the selection area does nothing in comment mode and can be cancelled with Escape", async () => {
+    const page = await open();
+    await page.evaluate(() => (window as any).__viewer.fitAll());
+    const a = await screenRect(page, "n1a");
+    await page.keyboard.press("c");
+    await dragMouse(page, { x: a.x - 14, y: a.y - 14 }, { x: a.x + a.w + 14, y: a.y + a.h + 14 });
+    expect(await selection(page)).toEqual([]);
+    await page.keyboard.press("Escape"); // back to View
+    await page.mouse.move(a.x - 14, a.y - 14);
+    await page.mouse.down();
+    await page.mouse.move(a.x + a.w + 14, a.y + a.h + 14, { steps: 6 });
+    expect(await page.evaluate(() => getComputedStyle((window as any).__ui.marqueeEl).display)).toBe("block"); // the area is being drawn
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    expect(await selection(page)).toEqual([]);
+    expect(await page.evaluate(() => getComputedStyle((window as any).__ui.marqueeEl).display)).toBe("none");
+    await page.close();
+  }, 60000);
+
+  it("the camera flies to the requested frames, zooming out on a long trip, and ends with them completely on screen", async () => {
+    const page = await open();
+    const r = await page.evaluate(async () => {
+      const v = (window as any).__viewer, ui = (window as any).__ui;
+      await v.focusNodes(["n6b"]);
+      const start = v.world.scale.x, samples: number[] = [];
+      const sample = () => samples.push(v.world.scale.x);
+      v.app.ticker.add(sample);
+      const t0 = performance.now();
+      const res = await v.focusNodes(["nbu"]); // a page of the same size, far to the right
+      const ms = performance.now() - t0;
+      v.app.ticker.remove(sample);
+      const end = v.world.scale.x;
+      const ins = ui.insets(), sw = v.app.screen.width, sh = v.app.screen.height, b = v.boundsOf("nbu"), s = v.world.scale.x;
+      const rect = { x1: b.x * s + v.world.x, y1: b.y * s + v.world.y, x2: (b.x + b.w) * s + v.world.x, y2: (b.y + b.h) * s + v.world.y };
+      return { res, start, end, min: Math.min(...samples), n: samples.length, ms, flying: v.isFlying, inside: rect.x1 >= ins.left && rect.y1 >= ins.top && rect.x2 <= sw - ins.right && rect.y2 <= sh - ins.bottom };
+    });
+    expect(r.res).toEqual({ ok: true, missing: [] });
+    expect(r.flying).toBe(false);
+    expect(r.inside).toBe(true);
+    expect(r.ms).toBeGreaterThan(300); // it travels, it does not jump
+    expect(r.n).toBeGreaterThan(2);
+    expect(r.min).toBeLessThan(Math.min(r.start, r.end) * 0.85); // it pulled back on the way
+    await page.close();
+  }, 60000);
+
+  it("several requested frames all end up completely on screen, and unknown ids move nothing", async () => {
+    const page = await open();
+    const r = await page.evaluate(async () => {
+      const v = (window as any).__viewer, ui = (window as any).__ui;
+      const res = await v.focusNodes(["n1a", "nev", "ndr"]); // opposite corners of the design plus one in between
+      const ins = ui.insets(), sw = v.app.screen.width, sh = v.app.screen.height, s = v.world.scale.x;
+      const inside = ["n1a", "nev", "ndr"].every((id) => { const b = v.boundsOf(id); return b.x * s + v.world.x >= ins.left && b.y * s + v.world.y >= ins.top && (b.x + b.w) * s + v.world.x <= sw - ins.right && (b.y + b.h) * s + v.world.y <= sh - ins.bottom; });
+      const before = { x: v.world.x, y: v.world.y, s: v.world.scale.x };
+      const bad = await v.focusNodes(["n1a", "does-not-exist"]);
+      return { res, inside, bad, unmoved: before.x === v.world.x && before.y === v.world.y && before.s === v.world.scale.x };
+    });
+    expect(r.res.ok).toBe(true);
+    expect(r.inside).toBe(true);
+    expect(r.bad).toEqual({ ok: false, missing: ["does-not-exist"] });
+    expect(r.unmoved).toBe(true);
+    await page.close();
+  }, 60000);
+
+  it("taking the camera over (wheel) stops a flight, and reduced motion jumps straight there", async () => {
+    const page = await open();
+    const r = await page.evaluate(async () => {
+      const v = (window as any).__viewer;
+      await v.focusNodes(["n6b"]);
+      const p = v.focusNodes(["nbu"]);
+      await new Promise((r) => setTimeout(r, 120));
+      const during = v.isFlying;
+      v.app.canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true, cancelable: true }));
+      const res = await p;
+      return { during, after: v.isFlying, res };
+    });
+    expect(r.during).toBe(true);
+    expect(r.after).toBe(false);
+    expect(r.res.ok).toBe(true);
+    await page.close();
+
+    const calm = await open({ reducedMotion: "reduce" });
+    const q = await calm.evaluate(async () => {
+      const v = (window as any).__viewer;
+      const p = v.focusNodes(["nbu"]);
+      return { flyingAtOnce: v.isFlying, res: await p };
+    });
+    expect(q.flyingAtOnce).toBe(false);
+    expect(q.res.ok).toBe(true);
+    await calm.close();
+  }, 60000);
+
+  it("searching for a frame flies there and keeps it clear of the info popup", async () => {
+    const page = await open();
+    await page.keyboard.press("Control+f");
+    await page.keyboard.type("05-layout");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => (window as any).__ui.selection()[0] === "n9z");
+    await page.waitForFunction(() => !(window as any).__viewer.isFlying, null, { timeout: 5000 });
+    const r = await page.evaluate(() => {
+      const ui = (window as any).__ui, v = (window as any).__viewer, pop = document.querySelector(".mk-popup") as HTMLElement, s = v.world.scale.x, b = v.boundsOf("n9z");
+      return { left: b.x * s + v.world.x, right: (b.x + b.w) * s + v.world.x, popupRight: pop.offsetLeft + pop.offsetWidth, W: innerWidth, popup: getComputedStyle(pop).display };
+    });
+    expect(r.popup).toBe("block");
+    expect(r.left).toBeGreaterThanOrEqual(r.popupRight - 1);
+    expect(r.right).toBeLessThanOrEqual(r.W);
     await page.close();
   }, 60000);
 

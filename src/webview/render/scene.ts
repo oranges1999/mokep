@@ -24,6 +24,8 @@ export interface Scene {
   nodes: Map<string, Container>;
   data: Map<string, PenNode>;
   ids: Map<Container, string>;
+  /** Each node's own box (size from layout, position inside its parent). */
+  boxes: Map<string, Box>;
 }
 
 const boxOf = (n: PenNode, ctx: Ctx): Box => ctx.boxes.get(n.id) ?? { x: Number(n.x) || 0, y: Number(n.y) || 0, w: typeof n.width === "number" ? n.width : 0, h: typeof n.height === "number" ? n.height : 0 };
@@ -43,7 +45,7 @@ export function buildScene(doc: PenDocument, layout: LayoutResult, assets: Scene
     const c = addNode(root, n, ctx);
     if (c) frames.set(n.id, { node: n, box: boxOf(n, ctx) });
   }
-  return { root, frames, warnings, texts: reg.texts, rescale: (z) => scalers.forEach((f) => f(z)), nodes: ctx.nodes, data: ctx.data, ids: ctx.ids };
+  return { root, frames, warnings, texts: reg.texts, rescale: (z) => scalers.forEach((f) => f(z)), nodes: ctx.nodes, data: ctx.data, ids: ctx.ids, boxes: layout.boxes };
 }
 
 const asList = <T,>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
@@ -422,7 +424,7 @@ function drawIcon(c: Container, n: PenNode, box: Box, ctx: Ctx) {
   const color = typeof f === "string" ? f : f?.type === "color" ? String(R(f.color)) : "#000000";
   const res = iconSvg(set, name, color);
   if (!res) { ctx.warn(`icon "${name}" not found in ${lib}`); return; }
-  if (n.weight !== undefined && lib.startsWith("Material")) ctx.warn("icon weight is not supported, using weight 400");
+  // Icon `weight` is ignored on purpose: the bundled sets only exist at weight 400. A known limit (see CLAUDE.md), so no warning.
   const g = new Graphics().svg(res.svg);
   const [vx, vy, vw, vh] = res.vb;
   const sx = box.w / vw, sy = box.h / vh;

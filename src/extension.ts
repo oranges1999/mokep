@@ -137,20 +137,27 @@ export async function activate(ctx: vscode.ExtensionContext) {
         const files = [...open.values()].sort((a, b) => b.lastActive - a.lastActive);
         const active = files[0];
         const info = active ? await ask(active, { type: "info" }) : null;
-        return { ok: true, open: files.map((f) => f.uri.fsPath), active: active?.uri.fsPath ?? null, frames: info?.frames ?? [], warnings: info?.warnings ?? [] };
+        return { ok: true, open: files.map((f) => f.uri.fsPath), active: active?.uri.fsPath ?? null, frames: info?.frames ?? [], selection: info?.selection ?? [], view: info?.view ?? null, warnings: info?.warnings ?? [] };
       }
       case "open":
         await vscode.commands.executeCommand("vscode.openWith", vscode.Uri.file(req.file), "mokep.pen");
         return { ok: true };
       case "screenshot": {
-        const r = await ask(pick(req.file), { type: "screenshot", nodeId: req.nodeId, scale: req.scale ?? 1 });
+        const r = await ask(pick(req.file), { type: "screenshot", nodeId: req.nodeId, scale: req.scale, view: req.view });
         return { ok: true, png: r.png };
       }
       case "focus": {
+        const ids = req.nodeIds?.length ? req.nodeIds : req.nodeId ? [req.nodeId] : [];
+        if (!ids.length) return { ok: false, error: "give nodeId or nodeIds" };
         const target = pick(req.file);
         target.panel.reveal(undefined, true);
-        await ask(target, { type: "focus", nodeId: req.nodeId });
+        await ask(target, { type: "focus", nodeIds: ids }); // answers when the camera has arrived
         return { ok: true };
+      }
+      case "selection": {
+        const target = pick(req.file);
+        const r = await ask(target, { type: "selection" });
+        return { ok: true, file: target.uri.fsPath, ids: r.ids ?? [] };
       }
       case "activity":
         // Without a file (state, screenshot of the active file) every open viewer shows the agent.

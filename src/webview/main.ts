@@ -18,15 +18,21 @@ async function main() {
   window.addEventListener("message", async (e) => {
     const m = e.data;
     if (m?.type === "screenshot") {
-      try { vscode.postMessage({ type: "result", reqId: m.reqId, png: (await viewer.screenshot(m.nodeId, m.scale)).split(",")[1] }); }
+      try { vscode.postMessage({ type: "result", reqId: m.reqId, png: (await viewer.screenshot(m.nodeId, m.scale, !!m.view)).split(",")[1] }); }
       catch (err) { vscode.postMessage({ type: "result", reqId: m.reqId, error: (err as Error).message }); }
       return;
     }
-    if (m?.type === "focus") { vscode.postMessage({ type: "result", reqId: m.reqId, ok: viewer.focusNode(m.nodeId), error: viewer.scene?.nodes.has(m.nodeId) ? undefined : "node not found" }); return; }
+    if (m?.type === "focus") {
+      const ids: string[] = Array.isArray(m.nodeIds) ? m.nodeIds.map(String) : m.nodeId ? [String(m.nodeId)] : [];
+      const r = ids.length ? await ui.flyTo(ids) : { ok: false, missing: [] as string[] };
+      vscode.postMessage({ type: "result", reqId: m.reqId, ok: r.ok, error: r.ok ? undefined : ids.length ? `node not found: ${r.missing.join(", ")}` : "no node id given" });
+      return;
+    }
+    if (m?.type === "selection") { vscode.postMessage({ type: "result", reqId: m.reqId, ids: ui.selection() }); return; }
     if (m?.type === "comments") { ui.setComments(m.comments ?? []); return; }
     if (m?.type === "activity") { ui.setAgent(String(m.agent ?? "agent"), String(m.tool ?? "")); return; }
     if (m?.type === "status") { ui.setStatus(String(m.text ?? ""), String(m.state ?? "idle")); return; }
-    if (m?.type === "info") { vscode.postMessage({ type: "result", reqId: m.reqId, ...viewer.info() }); return; }
+    if (m?.type === "info") { vscode.postMessage({ type: "result", reqId: m.reqId, ...viewer.info(), view: viewer.view(), selection: ui.selection() }); return; }
     if (m?.type !== "load") return;
     try {
       if (m.baseUri) viewer.docBase = m.baseUri;
