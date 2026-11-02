@@ -4,6 +4,7 @@ import { AgentPresence } from "./agents";
 import { abs, cap, CSS, h, icon, ICONS, reduceMotion } from "./ui-kit";
 import { Viewer } from "./viewer";
 
+const SVG_NS = "http://www.w3.org/2000/svg";
 type Send = (m: Record<string, unknown>) => void;
 type Rect = { x: number; y: number; w: number; h: number };
 
@@ -45,6 +46,8 @@ export class Ui {
   private modesBox = h("div", "mk mk-card mk-modes", this.modeView, this.modeComment);
   private composer = h("div", "mk mk-card mk-composer");
   private composing: string | null = null;
+  private menu = h("div", "mk mk-card mk-menu");
+  private menuFor: string | null = null;
   private emptyEl = h("div", "mk mk-emptystate", h("b", "", "This design is empty"), "Ask your agent to add a frame, and it appears here.");
 
   constructor(private v: Viewer, host: HTMLElement, private send: Send) {
@@ -74,18 +77,27 @@ export class Ui {
     this.modeComment.setAttribute("aria-pressed", "false");
     this.modeView.addEventListener("click", () => this.setMode("view"));
     this.modeComment.addEventListener("click", () => this.setMode("comment"));
-    document.body.append(this.overlay, this.popup, this.findBox, this.bubble, this.agents.el, this.modesBox, this.cLauncher, this.cPanel, this.composer, this.emptyEl);
+    document.body.append(this.overlay, this.popup, this.findBox, this.bubble, this.agents.el, this.modesBox, this.cLauncher, this.cPanel, this.composer, this.menu, this.emptyEl);
     host.style.right = "0";
     const el = v.app.canvas;
     let down: { x: number; y: number } | null = null;
-    el.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+    el.addEventListener("pointerdown", (e) => { down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null; this.closeMenu(); });
+    el.addEventListener("wheel", () => this.closeMenu(), { passive: true }); // the menu would be left behind by the scroll
+    // Left click selects (View) or starts a comment (Comment). The menu belongs to the right button only.
     el.addEventListener("pointerup", (e) => {
-      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 4) {
+      if (e.button === 0 && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 4) {
         const id = this.pick(e.clientX, e.clientY);
         if (this.mode === "comment") { if (id) this.openComposer(id, e.clientX, e.clientY); else this.closeComposer(); }
         else this.select(id);
       }
       down = null;
+    });
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault(); // no browser or VS Code menu on the canvas
+      const id = this.pick(e.clientX, e.clientY);
+      if (!id) return this.closeMenu();
+      if (this.mode === "view") this.select(id);
+      this.openMenu(id, e.clientX, e.clientY);
     });
     el.addEventListener("pointermove", (e) => { this.hovered = this.pick(e.clientX, e.clientY); });
     el.addEventListener("pointerleave", () => { this.hovered = null; });
@@ -97,7 +109,7 @@ export class Ui {
         if (e.key === "v") this.setMode("view");
         else if (e.key === "c") this.setMode("comment");
       }
-      if (e.key === "Escape" && !typing) { if (this.composing) this.closeComposer(); else if (this.mode === "comment") this.setMode("view"); else this.select(null); }
+      if (e.key === "Escape" && !typing) { if (this.menuFor) this.closeMenu(); else if (this.composing) this.closeComposer(); else if (this.mode === "comment") this.setMode("view"); else this.select(null); }
     });
     window.addEventListener("keyup", (e) => { if (e.key === "Alt") this.alt = false; });
     window.addEventListener("blur", () => { this.alt = false; });
@@ -127,8 +139,46 @@ export class Ui {
   select(id: string | null) { this.selected = id; this.render(); }
 
   // ---- modes and the comment composer -------------------------------------
+  // ---- right-click menu: what you can do with the node under the pointer ----
+  private openMenu(id: string, x: number, y: number) {
+    const n = this.v.scene?.data.get(id);
+    if (!n) return;
+    this.menuFor = id;
+    const item = (ic: string, label: string, run: () => void) => {
+      const b = h("button", "mk-menuitem", icon(ic, 14), label);
+      b.setAttribute("role", "menuitem");
+      b.addEventListener("click", run);
+      return b;
+    };
+    const comment = item("comment", "Comment", () => { this.closeMenu(); this.setMode("comment"); this.openComposer(id, x, y); });
+    const copy = item("copy", "Copy id", () => {
+      void navigator.clipboard?.writeText(id).then(() => { copy.lastChild!.textContent = "Copied"; setTimeout(() => this.closeMenu(), 600); }, () => this.closeMenu());
+    });
+    this.menu.setAttribute("role", "menu");
+    this.menu.replaceChildren(h("div", "mk-menuhead", n.name ?? n.id), comment, copy);
+    this.menu.onkeydown = (e) => {
+      const items = [...this.menu.querySelectorAll<HTMLElement>(".mk-menuitem")];
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      if (e.key === "ArrowDown") { items[(at + 1) % items.length].focus(); e.preventDefault(); }
+      else if (e.key === "ArrowUp") { items[(at - 1 + items.length) % items.length].focus(); e.preventDefault(); }
+    };
+    this.menu.style.left = Math.max(8, Math.min(x + 8, window.innerWidth - 200)) + "px";
+    this.menu.style.top = Math.max(8, Math.min(y + 8, window.innerHeight - 130)) + "px";
+    this.menu.style.display = "block";
+    if (!reduceMotion()) this.menu.animate([{ opacity: 0, transform: "scale(.96)" }, { opacity: 1, transform: "none" }], { duration: 120, easing: "cubic-bezier(.2,.8,.2,1)" });
+    comment.focus();
+  }
+
+  private closeMenu() {
+    if (!this.menuFor) return;
+    this.menuFor = null;
+    if (this.menu.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    this.menu.style.display = "none";
+  }
+
   setMode(m: "view" | "comment") {
     if (m === this.mode) return;
+    this.closeMenu();
     this.mode = m;
     this.modeView.setAttribute("aria-pressed", String(m === "view"));
     this.modeComment.setAttribute("aria-pressed", String(m === "comment"));
@@ -288,10 +338,44 @@ export class Ui {
     }));
   }
 
+  /** Boxes of the floating UI (panels, toolbar, indicator…). Pins are kept out of them so nothing hides a marker. */
+  private chromeRects(): DOMRect[] {
+    return [this.modesBox, this.findBox, this.agents.el, this.cLauncher, this.cPanel, this.popup, this.bubble, this.composer, this.menu]
+      .filter((e) => e.getClientRects().length > 0)
+      .map((e) => e.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0);
+  }
+
+  /** The free spot nearest to `p`: a point that clears every box and stays inside the window. Candidates come from a grid
+   *  of the boxes' own edges, so a pin leaving one box never lands in the box next to it. */
+  private clearOf(p: { x: number; y: number }, boxes: DOMRect[], taken: { x: number; y: number }[] = []) {
+    const pad = 16, gap = 26, W = window.innerWidth, H = window.innerHeight;
+    const blocked = (x: number, y: number) => boxes.some((b) => x > b.left - pad && x < b.right + pad && y > b.top - pad && y < b.bottom + pad);
+    if (!blocked(p.x, p.y)) return p;
+    const inside = (x: number, y: number) => x >= pad / 2 && x <= W - pad / 2 && y >= pad / 2 && y <= H - pad / 2;
+    // Pins that were already moved out of the way must not be stacked on the same spot.
+    const free = (x: number, y: number) => inside(x, y) && !blocked(x, y) && taken.every((t) => Math.hypot(t.x - x, t.y - y) >= gap);
+    const xs = [p.x, ...boxes.flatMap((b) => [b.left - pad, b.right + pad])];
+    const ys = [p.y, ...boxes.flatMap((b) => [b.top - pad, b.bottom + pad])];
+    const spots = xs.flatMap((x) => ys.map((y) => ({ x, y }))).filter((s) => inside(s.x, s.y) && !blocked(s.x, s.y))
+      .sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y));
+    for (const s of spots) {
+      if (free(s.x, s.y)) return s;
+      for (let k = 1; k <= 3; k++) for (const [dx, dy] of [[0, gap], [gap, 0], [-gap, 0], [0, -gap]]) if (free(s.x + dx * k, s.y + dy * k)) return { x: s.x + dx * k, y: s.y + dy * k };
+    }
+    return spots[0] ?? p;
+  }
+
   private drawPins() {
     this.pins.replaceChildren();
     if (this.mode !== "comment") return;
     const open = this.comments.filter((c) => !c.resolved);
+    if (!open.length) return;
+    const boxes = this.chromeRects();
+    const lines = document.createElementNS(SVG_NS, "svg");
+    lines.setAttribute("style", "position:absolute;inset:0;width:100%;height:100%;overflow:visible");
+    const marks: HTMLElement[] = [];
+    const placed: { x: number; y: number }[] = [];
     const count = new Map<string, number>();
     open.forEach((c, idx) => {
       const r = this.rectOf(c.nodeId);
@@ -299,10 +383,24 @@ export class Ui {
       const s = this.toScreen(r);
       const n = count.get(c.nodeId) ?? 0;
       count.set(c.nodeId, n + 1);
-      const pin = abs(`position:absolute;left:${s.x + s.w - 10 + n * 22}px;top:${s.y - 10}px;width:20px;height:20px;border-radius:50%;background:${c.author === "agent" ? "#a78bfa" : "#f5b942"};color:#17181c;box-shadow:0 0 0 2px #17181c;font:600 11px/20px 'Segoe UI',system-ui,sans-serif;text-align:center`);
+      const anchor = { x: s.x + s.w + n * 22, y: s.y }; // the node's top right corner
+      if (anchor.x < -20 || anchor.y < -20 || anchor.x > window.innerWidth + 20 || anchor.y > window.innerHeight + 20) return; // off screen
+      const at = this.clearOf(anchor, boxes, placed);
+      placed.push(at);
+      const color = c.author === "agent" ? "#a78bfa" : "#f5b942";
+      if (at.x !== anchor.x || at.y !== anchor.y) {
+        // The pin had to leave its node, so a line and a dot show where it belongs.
+        const ln = document.createElementNS(SVG_NS, "line");
+        for (const [k, v] of Object.entries({ x1: anchor.x, y1: anchor.y, x2: at.x, y2: at.y, stroke: color, "stroke-width": 1.5, "stroke-opacity": 0.7 })) ln.setAttribute(k, String(v));
+        const dot = document.createElementNS(SVG_NS, "circle");
+        for (const [k, v] of Object.entries({ cx: anchor.x, cy: anchor.y, r: 3, fill: color })) dot.setAttribute(k, String(v));
+        lines.append(ln, dot);
+      }
+      const pin = abs(`position:absolute;left:${at.x - 10}px;top:${at.y - 10}px;width:20px;height:20px;border-radius:50%;background:${color};color:#17181c;box-shadow:0 0 0 2px #17181c;font:600 11px/20px 'Segoe UI',system-ui,sans-serif;text-align:center`);
       pin.textContent = String(idx + 1);
-      this.pins.append(pin);
+      marks.push(pin);
     });
+    this.pins.append(lines, ...marks);
   }
 
   // ---- status bubble (bottom centre) --------------------------------------
@@ -391,7 +489,6 @@ export class Ui {
       geo,
       ...(rows.length ? [h("div", "mk-rows", ...rows)] : []),
       h("details", "mk-details", h("summary", "", "All properties"), h("pre", "mk-pre", json.length > 2000 ? json.slice(0, 2000) + "\n…" : json)),
-      this.animationNote(n),
       h("div", "mk-hint", "Hold Alt over another node to measure the distance."),
     );
     // Already open: the content was swapped above and that is all. Only a fresh open slides in.
@@ -400,13 +497,6 @@ export class Ui {
     p.style.display = "block";
     if (wasOpen || reduceMotion()) return;
     p.animate([{ opacity: 0, transform: "translateX(-16px) scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
-  }
-
-  /** Element animation is not part of the format; agents describe it in metadata ({ type: "animation", description }). */
-  private animationNote(n: Record<string, any>) {
-    const m = n.metadata;
-    if (!m || m.type !== "animation" || typeof m.description !== "string") return "";
-    return h("div", "mk-note", h("b", "", "Animation (described)"), m.description);
   }
 
   // ---- comments area (bottom right launcher, floating panel on the right) ----

@@ -10,11 +10,11 @@ It is an independent project. It does not copy code, UI or assets from pen.dev.
 - Opens `*.pen` files in a canvas. Mouse wheel scrolls, Shift+wheel scrolls sideways, Ctrl+wheel (or a trackpad pinch) zooms. The files are plain JSON; files saved by pen.dev can be encrypted, and Mokep cannot read those.
 - Renders frames, shapes, fills, strokes, gradients (including mesh), effects, blend modes, text, icons, images, flex layout, components with overrides, variables and themes.
 - Never runs `script` nodes. They are shown as placeholders.
-- Element animation is not part of the format and is not rendered. Agents describe it in `metadata: { "type": "animation", "description": "..." }` and the info popup shows that text.
+- Designs are shown as still pictures. Animation inside a design is out of scope.
 
 **Two modes** (switch top left, or press `V` and `C`)
-- **View:** click a node to see its info in a floating popup: name, type, id, position and size, main properties and all properties.
-- **Comment:** click a node and type a comment right there (Ctrl+Enter posts). The comments panel lists every comment of the file, numbers match the pins on the canvas, and you can resolve, reopen or delete them. The agent reads and answers them.
+- **View:** click a node to select it and see its info in a floating popup (name, type, id, position and size, main properties, all properties). Right-click a node for a small menu with **Comment** and **Copy id**; Comment switches to comment mode and opens the composer right there.
+- **Comment:** click a node and type a comment right there (Ctrl+Enter posts). The comments panel lists every comment of the file, numbers match the pins on the canvas, and you can resolve, reopen or delete them. Pins step aside for panels, the toolbar and the agent indicator, and a thin line shows which node a moved pin belongs to. The agent reads and answers them.
 
 **Around the canvas**
 - Search bar at the top (Ctrl+F) finds frames by name or id. The theme select next to it switches the design's own themes (for example `mode: light/dark`), not the extension's look.
@@ -22,8 +22,6 @@ It is an independent project. It does not copy code, UI or assets from pen.dev.
 - When the agent edits the file, moved nodes slide, new nodes fade in and changed nodes flash.
 - An indicator at the top right shows which agent is working and breathes while it is active.
 - Sidebar icon (activity bar) lists recently opened designs, with buttons to create a new design file or open an existing one.
-
-The design-to-code bridge is not built yet.
 
 ## Agent tools (MCP)
 
@@ -43,7 +41,7 @@ Mokep is not published to a marketplace. Build the package and install it from a
 npm install
 npm run assets      # downloads the bundled fonts and icons
 npm run package     # minified build, creates mokep-<version>.vsix
-code --install-extension mokep-0.1.0.vsix
+code --install-extension mokep-<version>.vsix
 ```
 
 On first start, Mokep asks in a notification whether to register its MCP server with Claude Code. Nothing runs until you click Install. This needs Node.js 18 or newer and the `claude` CLI on your PATH. You can also run `Mokep: Set up MCP for Claude Code` or `Mokep: Copy MCP setup command` from the command palette.
@@ -81,4 +79,4 @@ Project layout:
 
 ## Licenses
 
-The project itself has no license yet (`UNLICENSED`). Bundled fonts (Fontsource, OFL or Apache) and icons (Lucide, Material Symbols) keep their own licenses, which are in `assets/fonts/licenses` and `assets/icons/licenses`.
+This is a private project and has no license. Bundled fonts (Fontsource, OFL or Apache) and icons (Lucide, Material Symbols) keep their own licenses, which are in `assets/fonts/licenses` and `assets/icons/licenses`.

@@ -30,8 +30,11 @@ export const CSS = `
 .mk-details summary{cursor:pointer;color:var(--mk-muted);width:max-content;border-radius:var(--mk-r-sm)}
 .mk-details summary:hover{color:var(--mk-text)}
 .mk-pre{margin:8px 0 0;padding:10px;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--mk-ink);border-radius:var(--mk-r-md);color:#c9ccd3;font:11px/1.5 var(--mk-mono)}
-.mk-note{margin-top:14px;padding:10px;border-radius:var(--mk-r-md);background:color-mix(in srgb,var(--mk-agent) 14%,transparent)}
-.mk-note b{display:block;font-weight:600;margin-bottom:2px}
+.mk-menu{position:fixed;min-width:180px;max-width:260px;padding:6px;display:none;z-index:13}
+.mk-menuhead{padding:4px 8px 6px;color:var(--mk-muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mk-menuitem{display:flex;align-items:center;gap:8px;width:100%;border:0;border-radius:var(--mk-r-sm);padding:7px 8px;background:transparent;color:var(--mk-text);font:13px var(--mk-font);text-align:left;cursor:pointer;transition:background .12s}
+.mk-menuitem:hover,.mk-menuitem:focus-visible{background:var(--mk-raised)}
+.mk-menuitem svg{color:var(--mk-muted)}
 .mk-cbtn{position:fixed;right:16px;bottom:18px;display:flex;align-items:center;gap:8px;padding:8px 14px;border:0;border-radius:999px;color:var(--mk-text);font:600 12.5px var(--mk-font);cursor:pointer;z-index:6;transition:background .12s}
 .mk-cbtn:hover{background:var(--mk-raised)}
 .mk-badge{min-width:18px;height:18px;border-radius:9px;padding:0 5px;background:var(--mk-user);color:var(--mk-ink);font:600 11px/18px var(--mk-font);text-align:center}
@@ -119,6 +122,7 @@ export const ICONS: Record<string, string> = {
   close: '<path d="M4 4l8 8M12 4l-8 8"/>',
   comment: '<path d="M3 3.5h10v7H8.5L5.5 13v-2.5H3z"/>',
   cursor: '<path d="M3.5 2.5l9 4-3.8 1.4L7.3 12z"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-1A1.5 1.5 0 0 0 9 3H4.5A1.5 1.5 0 0 0 3 4.5V9a1.5 1.5 0 0 0 1.5 1.5h1"/>',
   dot: '<circle cx="8" cy="8" r="2"/>',
 };
 /** Static, trusted markup only. */

@@ -20,6 +20,7 @@ async function open(opts: { reducedMotion?: "reduce" } = {}) {
 /** Screen centre of a node, for real mouse clicks. */
 const centre = (page: Page, id: string) => page.evaluate((nid) => { const v = (window as any).__viewer, b = v.boundsOf(nid), s = v.world.scale.x; return { x: (b.x + b.w / 2) * s + v.world.x, y: (b.y + b.h / 2) * s + v.world.y }; }, id);
 const click = async (page: Page, id: string) => { const p = await centre(page, id); await page.mouse.click(p.x, p.y); };
+const rclick = async (page: Page, id: string) => { const p = await centre(page, id); await page.mouse.click(p.x, p.y, { button: "right" }); };
 const sent = (page: Page) => page.evaluate(() => (window as any).__sent as any[]);
 const display = (page: Page, sel: string) => page.evaluate((s) => getComputedStyle(document.querySelector(s)!).display, sel);
 
@@ -36,8 +37,99 @@ describe.skipIf(!CHROME)("viewer UI", () => {
     expect(after.animations).toBe(0);
     expect(after.opacity).toBe(1);
     expect(after.text).not.toMatch(/comment/i); // comments live in their own area
+    expect(await display(page, ".mk-menu")).toBe("none"); // a left click only selects
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => getComputedStyle(document.querySelector(".mk-popup")!).display === "none");
+    await page.close();
+  }, 60000);
+
+  it("right click opens a menu with Comment and Copy id; Comment opens the composer on that node", async () => {
+    const page = await open();
+    await click(page, "n9");
+    expect(await display(page, ".mk-menu")).toBe("none"); // left click: select only
+    await rclick(page, "n9");
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".mk-menu")!).display === "block");
+    expect(await display(page, ".mk-popup")).toBe("block"); // right click selects the node too
+    const menu = await page.evaluate(() => ({ head: document.querySelector(".mk-menuhead")!.textContent, items: [...document.querySelectorAll(".mk-menuitem")].map((b) => b.textContent), focused: document.activeElement?.textContent }));
+    expect(menu.items).toEqual(["Comment", "Copy id"]);
+    expect(menu.head).toBeTruthy();
+    expect(menu.focused).toBe("Comment");
+    await page.keyboard.press("ArrowDown");
+    expect(await page.evaluate(() => document.activeElement?.textContent)).toBe("Copy id");
+    await page.keyboard.press("ArrowUp");
+    await page.getByRole("menuitem", { name: "Comment" }).click();
+    expect(await display(page, ".mk-menu")).toBe("none");
+    expect(await page.evaluate(() => document.querySelector(".mk-mode[aria-pressed=true]")!.getAttribute("data-kind"))).toBe("comment");
+    await page.waitForSelector(".mk-composer textarea");
+    expect(await page.evaluate(() => document.querySelector(".mk-composer .mk-title")!.textContent)).toContain(menu.head!);
+    await page.close();
+  }, 60000);
+
+  it("the menu closes on Escape, on a left press elsewhere, on wheel and on mode change; right click on empty canvas opens nothing", async () => {
+    const page = await open();
+    const isOpen = () => display(page, ".mk-menu").then((d) => d === "block");
+    await rclick(page, "n6"); expect(await isOpen()).toBe(true);
+    await page.keyboard.press("Escape"); expect(await isOpen()).toBe(false);
+    expect(await display(page, ".mk-popup")).toBe("block"); // the node stays selected
+    await rclick(page, "n6"); expect(await isOpen()).toBe(true);
+    await page.mouse.click(5, 450); expect(await isOpen()).toBe(false);
+    await rclick(page, "n6"); await page.mouse.wheel(0, 40); expect(await isOpen()).toBe(false);
+    await rclick(page, "n6"); await page.keyboard.press("c");
+    expect(await isOpen()).toBe(false);
+    await page.mouse.click(5, 450, { button: "right" }); expect(await isOpen()).toBe(false); // nothing under the pointer
+    await rclick(page, "n6"); expect(await isOpen()).toBe(true); // comment mode: the right button still opens the menu
+    await page.keyboard.press("Escape");
+    await click(page, "n9"); // comment mode, left click: straight to the composer, no menu
+    expect(await isOpen()).toBe(false);
+    await page.waitForSelector(".mk-composer textarea");
+    await page.close();
+  }, 60000);
+
+  it("Copy id shows Copied and closes the menu", async () => {
+    const page = await open();
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await rclick(page, "n9");
+    await page.getByRole("menuitem", { name: "Copy id" }).click();
+    await page.waitForFunction(() => document.querySelector(".mk-menuitem:last-child")?.textContent === "Copied"); // the clipboard write is asynchronous
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".mk-menu")!).display === "none");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/\S/);
+    await page.close();
+  }, 60000);
+
+  it("comment pins step aside for the agent indicator and the panels, and a line shows where they belong", async () => {
+    const page = await open();
+    await page.evaluate(() => {
+      const ui = (window as any).__ui;
+      ui.setComments([
+        { id: "c1", nodeId: "n1a", text: "Check", author: "user", createdAt: "", resolved: false },
+        { id: "c2", nodeId: "n1a", text: "Again", author: "agent", createdAt: "", resolved: false },
+      ]);
+      ui.setAgent("claude-code", "read");
+    });
+    await page.keyboard.press("c");
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".mk-cpanel")!).display === "block");
+    // Put the frame's top right corner right under the agent indicator, then under the comments panel.
+    const probe = (x: number, y: number) => page.evaluate(async ({ x, y }) => {
+      const v = (window as any).__viewer, ui = (window as any).__ui, b = v.boundsOf("n1a"), s = v.world.scale.x;
+      v.world.position.set(x - (b.x + b.w) * s, y - b.y * s);
+      // Wait for two frames of the renderer: software GL is slow, so a fixed delay would not be enough.
+      const tick = () => new Promise<void>((r) => v.app.ticker.addOnce(() => r()));
+      await tick(); await tick();
+      const boxes: DOMRect[] = ui.chromeRects();
+      const pins = [...ui.pins.children].filter((e: Element) => e.tagName === "DIV") as HTMLElement[];
+      const rects = pins.map((p) => p.getBoundingClientRect());
+      const hidden = rects.some((r) => boxes.some((c) => r.left < c.right && r.right > c.left && r.top < c.bottom && r.bottom > c.top));
+      const stacked = rects.some((a, i) => rects.some((b, j) => i < j && Math.hypot(a.x - b.x, a.y - b.y) < 20));
+      return { pins: pins.length, hidden, stacked, lines: ui.pins.querySelectorAll("line").length };
+    }, { x, y });
+    const underIndicator = await probe(1400 - 90, 30);
+    expect(underIndicator).toMatchObject({ pins: 2, hidden: false, stacked: false });
+    expect(underIndicator.lines).toBeGreaterThan(0);
+    const underPanel = await probe(1400 - 150, 250);
+    expect(underPanel).toMatchObject({ pins: 2, hidden: false, stacked: false });
+    expect(underPanel.lines).toBeGreaterThan(0);
+    const free = await probe(700, 450); // nothing in the way: pins stay on their node, no lines
+    expect(free).toMatchObject({ pins: 2, hidden: false, stacked: false, lines: 0 });
     await page.close();
   }, 60000);
 

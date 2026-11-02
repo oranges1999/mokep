@@ -47,8 +47,8 @@ M1 parse + shapes/fills/strokes + pan/zoom. M2 layout (Yoga) + text + fonts. M3 
 - Outer shadow of a frame with `clip: true` is clipped by the frame.
 - Icon `weight` is ignored (weight 400 icons). `feather` library maps to lucide.
 - Image crop supports axis-aligned transforms only.
-- Pending: design-to-code bridge (output format not chosen).
-- Element animation is not part of the .pen format and is never rendered. Agents describe it in `metadata: { type: "animation", description }`; the inspector shows that text.
+- Out of scope, by decision: a design-to-code or code-to-design bridge, and any animation inside a design. There is no project license (private).
+- Designs are always rendered as still pictures. The extension's own animations (popup, agent edits, indicator) stay.
 - Agent edits animate in the viewer (moved nodes slide, new nodes fade in, changed nodes flash). Deleted nodes just disappear. Reduced-motion users get the flash only.
 - Ctrl+F in the canvas finds frames by name or id.
 - First run asks (notification) to register the MCP server with Claude Code via `claude mcp add --scope user mokep`. It never runs without a click and needs Node and the `claude` CLI on PATH.
@@ -62,3 +62,5 @@ M1 parse + shapes/fills/strokes + pan/zoom. M2 layout (Yoga) + text + fonts. M3 
 - Webview CSP (`src/csp.ts`, shared with `test/csp.test.ts`) has no `unsafe-eval`: Pixi uses `pixi.js/unsafe-eval`, Yoga needs `wasm-unsafe-eval` and `connect-src data:` for its embedded wasm.
 - MCP tools refuse any path that is not `.pen` or `.pen.json` (`assertPen`). Comments can be added, resolved, reopened and deleted from the viewer; the agent can add, resolve and reopen but not delete. There is no edit-comment yet.
 - UI code layout: `ui.ts` (behaviour), `ui-kit.ts` (CSS tokens, icons, DOM helpers), `agents.ts` (agent presence). Tests: `test/ui.test.ts` (real mouse and keyboard), `test/csp.test.ts`, `test/bridge-windows.test.ts`.
+- Right-click menu: only the right button opens it (contextmenu event, the native menu is suppressed on the canvas). A left click just selects (View) or starts a comment (Comment). The menu has Comment and Copy id; Comment switches to comment mode and opens the composer on that node. It closes on Escape, on any canvas press, on wheel and on mode change. Whether VS Code lets the webview suppress its own context menu is not verified.
+- Pins (comment mode) are pushed out of every floating box (`chromeRects` and `clearOf` in ui.ts: toolbar, search, indicator, panels, popup, composer, menu) and get a line plus an anchor dot when moved off their node.
