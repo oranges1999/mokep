@@ -22,7 +22,7 @@ It is an independent project. It does not copy code, UI or assets from pen.dev.
 - Going to a frame (search, the agent's focus, the node name in a comment) flies the camera there: it pans, and zooms in or out as much as needed so every requested frame is completely on screen and clear of the floating panels. A long trip zooms out first so you keep your bearings. With reduced motion the camera jumps.
 - When the agent edits the file, moved nodes slide, new nodes fade in and changed nodes flash.
 - The agent can ask what you are looking at (zoom, visible area, frames on screen) and take a screenshot of exactly your current view.
-- While an agent works, a glow breathes around the whole screen and a label shows which agent and what it does. It stays on until the agent says it is done. When the agent flies the camera to frames, their borders breathe 5 times so you can find them.
+- While an agent works, a glow breathes around the whole screen and a label shows which agent and what it does. It stays on until the agent says it is done (`mokep_status` with state `idle`); if the agent never does, it turns off after 10 seconds without a call. When the agent flies the camera to frames, their borders breathe 5 times so you can find them.
 - Sidebar icon (activity bar) lists recently opened designs, with buttons to create a new design file or open an existing one.
 
 ## Agent tools (MCP)
@@ -30,9 +30,10 @@ It is an independent project. It does not copy code, UI or assets from pen.dev.
 `mokep_read`, `mokep_edit`, `mokep_lint`, `mokep_open`, `mokep_state`, `mokep_focus`, `mokep_screenshot`, `mokep_selection`, `mokep_status`, `mokep_comments` and `mokep_comment`.
 
 - The tools only work on `.pen` files.
-- `mokep_selection` returns what you have selected in the viewer (one node, or the frames of a drag selection), and `mokep_state` lists the selected ids. `mokep_focus` takes `nodeIds` to show several frames together.
+- `mokep_selection` returns what you have selected in the viewer (one node, or the frames of a drag selection), and `mokep_state` lists the selected ids and a `view` (zoom, visible area, frames on screen with the share of each that is visible). `mokep_focus` takes `nodeIds` to show several frames together.
+- The server sends the agents short instructions on connect: call `mokep_status` with `idle` when finished, and use `mokep_focus` to show frames.
 - Edits are written atomically and validated (ids and refs). An edit is blocked while the file has uncommitted git changes, unless the agent acknowledges it. Undo is done with git.
-- Screenshots come from the open viewer, so `mokep_screenshot` only works while the file is open in VS Code.
+- Screenshots come from the open viewer, so `mokep_screenshot` only works while the file is open in VS Code. Without `scale` the longest side is at most 1568 px, which keeps calls fast. `view: true` captures exactly what is on your screen.
 - Each VS Code window runs its own bridge on `127.0.0.1`, protected by a token, and writes a file in `~/.mokep/bridges/`. The MCP server talks to the window that has the file open, or else to the window you used last.
 - Comments are stored next to the design as `<name>.pen.comments.json`.
 
@@ -68,7 +69,7 @@ npm run fixture     # regenerate fixtures/test.pen.json
 ```
 
 - Visual tests render `fixtures/test.pen.json` in Chrome and compare it with pen.dev exports using a percentage threshold. Eight of the nine frames differ by less than 2%; `09-misc` by about 8%.
-- UI tests drive the real interface with mouse and keyboard (modes, popup, comments, agent indicator, reduced motion, wheel). A CSP test renders the viewer under the exact policy the extension sends.
+- UI tests drive the real interface with mouse and keyboard (modes, popup, comments, agent indicator, reduced motion, wheel). A CSP test renders the viewer under the exact policy the extension sends, and protocol tests run the production bundle (`harness/webview.html`) with the same messages the extension host sends.
 
 Project layout:
 
