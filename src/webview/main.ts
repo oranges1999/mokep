@@ -14,6 +14,7 @@ async function main() {
   const ui = new Ui(viewer, host, (msg) => vscode.postMessage(msg));
   viewer.app.resize();
   viewer.onChanged = (ids) => ui.flash(ids);
+  viewer.onRemoved = (boxes) => ui.ghost(boxes);
   let first = true;
   window.addEventListener("message", async (e) => {
     const m = e.data;

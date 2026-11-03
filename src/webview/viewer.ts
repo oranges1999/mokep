@@ -12,6 +12,9 @@ import { measureSpec, specOf } from "./render/text";
 import { rv } from "../core/variables";
 import type { PenDocument } from "../core/schema";
 
+/** What the viewer remembers of a node before an agent edit, to find what moved, changed or was deleted. */
+type Snap = { j: string; x: number; y: number; b: { x: number; y: number; w: number; h: number } | null; parent?: string };
+
 export class Viewer {
   app = new Application();
   world = new Container();
@@ -23,6 +26,8 @@ export class Viewer {
   onLoaded: (() => void) | null = null;
   /** Ids of nodes that were added or changed by the last animated reload (an agent edit). */
   onChanged: ((ids: string[]) => void) | null = null;
+  /** Called with the world boxes of the topmost nodes an edit deleted, so the UI can show where they were. */
+  onRemoved: ((boxes: { x: number; y: number; w: number; h: number }[]) => void) | null = null;
   private tweens: { c: Container; prop: "x" | "y" | "alpha"; from: number; to: number; elapsed: number; dur: number }[] = [];
   fontBase = "/assets/fonts/";
   iconBase = "/assets/icons/";
@@ -52,16 +57,16 @@ export class Viewer {
 
   private snapshot() {
     if (!this.scene) return null;
-    const m = new Map<string, { j: string; x: number; y: number }>();
+    const m = new Map<string, Snap>();
     for (const [id, c] of this.scene.nodes) {
       const { children: _c, ...rest } = this.scene.data.get(id)! as Record<string, unknown>;
-      m.set(id, { j: JSON.stringify(rest), x: c.position.x, y: c.position.y });
+      m.set(id, { j: JSON.stringify(rest), x: c.position.x, y: c.position.y, b: this.worldBounds(id), parent: c.parent ? this.scene.ids.get(c.parent as Container) : undefined });
     }
     return m;
   }
 
   /** Compare with the previous scene by node id: moved nodes slide, new nodes fade in, and changes are reported for highlighting. */
-  private animateChanges(prev: Map<string, { j: string; x: number; y: number }>) {
+  private animateChanges(prev: Map<string, Snap>) {
     const sc = this.scene!;
     const added = new Set<string>(), changed = new Set<string>();
     for (const [id, c] of sc.nodes) {
@@ -85,6 +90,11 @@ export class Viewer {
       for (const id of newTop) { const c = sc.nodes.get(id)!; const to = c.alpha; c.alpha = 0; this.tweens.push({ c, prop: "alpha", from: 0, to, elapsed: 0, dur: 300 }); }
     }
     this.onChanged?.([...newTop, ...changed].slice(0, 40));
+    // Deleted nodes: report the boxes of the topmost ones (a deleted frame takes its children with it).
+    const gone = [...prev].filter(([id]) => !sc.nodes.has(id));
+    const goneIds = new Set(gone.map(([id]) => id));
+    const boxes = gone.filter(([, o]) => o.b && !(o.parent && goneIds.has(o.parent))).map(([, o]) => o.b!).slice(0, 40);
+    if (boxes.length) this.onRemoved?.(boxes);
   }
 
   async setTheme(axis: string, value: string | null) {
@@ -256,7 +266,9 @@ export class Viewer {
    *  Resolves when the camera arrives (at once with reduced motion) or when something else takes the camera over.
    *  Nothing moves if any id is unknown. */
   focusNodes(ids: string[]): Promise<{ ok: boolean; missing: string[] }> {
-    const rects = ids.map((id) => ({ id, r: this.worldBounds(id) }));
+    // The layout box, not the drawn bounds: a frame with no fill and no children draws nothing, its drawn bounds are empty
+    // and put the camera at a random far spot (what happened when the agent focused a freshly inserted empty section).
+    const rects = ids.map((id) => ({ id, r: this.ownBounds(id) ?? this.worldBounds(id) }));
     const missing = rects.filter((x) => !x.r).map((x) => x.id);
     if (missing.length || !rects.length) return Promise.resolve({ ok: false, missing: missing.length ? missing : ids });
     const sw = this.app.screen.width, sh = this.app.screen.height;

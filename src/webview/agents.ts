@@ -8,7 +8,7 @@ const ACTION: Record<string, string> = {
 const pretty = (name: string) => name.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 /** The agent ends its run itself (mokep_status idle or empty). This is only the fallback for an agent that never does,
  *  for example one that was interrupted, so the indicator cannot stay on for ever. */
-const HOLD_MS = 10_000;
+const HOLD_MS = 180_000; // an agent writing a big edit or thinking makes no call for well over 10 s, which switched the indicator off mid-work
 
 type View = { el: HTMLElement; halo: HTMLElement; act: HTMLElement; phase: "in" | "loop" | "out"; timer?: ReturnType<typeof setTimeout> };
 

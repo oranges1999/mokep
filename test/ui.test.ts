@@ -277,6 +277,23 @@ describe.skipIf(!CHROME)("viewer UI", () => {
     await page.close();
   }, 60000);
 
+  it("the camera flies to an empty frame (no fill, no children) and not to a random far spot", async () => {
+    const page = await open();
+    const r = await page.evaluate(async () => {
+      const v = (window as any).__viewer, ui = (window as any).__ui;
+      await v.load(JSON.stringify({ version: "2.21", children: [{ id: "e", type: "frame", x: 5000, y: 4000, width: 300, height: 200, layout: "vertical" }] }));
+      const res = await ui.flyTo(["e"]);
+      const s = v.world.scale.x, sw = v.app.screen.width, sh = v.app.screen.height;
+      return { ok: res.ok, scale: s, cx: (sw / 2 - v.world.x) / s, cy: (sh / 2 - v.world.y) / s };
+    });
+    expect(r.ok).toBe(true);
+    expect(r.scale).toBeGreaterThan(0.3);
+    expect(r.scale).toBeLessThan(8);
+    expect(Math.abs(r.cx - 5150)).toBeLessThan(400); // the free area is offset by the floating panels, so allow some slack
+    expect(Math.abs(r.cy - 4100)).toBeLessThan(400);
+    await page.close();
+  }, 60000);
+
   it("searching for a frame also marks where it is", async () => {
     const page = await open();
     await page.evaluate(() => { const ui = (window as any).__ui; ui.locateBeats = 3; });

@@ -13,11 +13,16 @@ import { assertPen, gitDirty, readDoc, writeAtomic } from "./files";
 
 const INSTRUCTIONS = [
   "Mokep shows the design to the user while you work on it.",
-  "While you are working, a glow breathes around the user's screen and stays on until you say you are done.",
-  "When you have completely finished, with no more Mokep calls to make, call mokep_status once with state \"idle\" and a short summary (an empty text also works) so the glow can turn off.",
+  "The glow around the user's screen shows that you are working on a design. Use it only when the user asked you to do something with a design file (read, design, edit, review); for a question that needs no file work, make no Mokep call and leave the glow off.",
+  "As the first thing you do for such a request, call mokep_status with state \"working\" and a short text, before any other Mokep call; the glow starts then and stays on while you work.",
+  "Right before you reply to the user, call mokep_status once with state \"idle\" and a short summary (an empty text also works) so the glow turns off; make no Mokep call after it. Every request that turned the glow on must end this way.",
   "While you work you can call mokep_status with state \"working\" and a short text, so the user can read what you are doing.",
   "To show the user where the frames you mention are, call mokep_focus with their ids (nodeIds for several): the camera flies there and the frames' outlines breathe for a few seconds.",
-  "To design quickly: build one section per mokep_edit call (nav, then hero, then the next section) instead of the whole page in one call, so the user sees it appear and a mistake costs one section.",
+  "Design live, on the file itself, the way a person draws: never write a whole page or section as one big node tree.",
+  "First insert the empty frame of a section (size, layout, fill, padding, gap, no children), then insert its children one small mokep_edit call at a time (a heading, a card frame, then the texts and buttons inside that card), so the user watches each element appear.",
+  "Each call holds a few small nodes at most; the viewer shows every edit as it lands. Changing or deleting things is shown too (changed nodes flash violet, deleted ones leave a red dashed box), so delete or replace a node on the file instead of silently rewriting a large part.",
+  "Move the camera as you go: before you design each section, call mokep_focus on the frame or area where it will go (the parent frame when the spot is empty), then edit; repeat for every section.",
+  "When everything is done, call mokep_focus with the top-level frame or frames (nodeIds) so the user sees the whole result, then call mokep_status with state \"idle\".",
   "Give the frame a fixed width and let sections use width fill_container with layout vertical or horizontal, gap and padding; avoid x/y on nested nodes.",
   "A stroke is a paint plus separate props: \"stroke\": \"#14130F\", \"strokeWidth\": 1.5, \"strokeAlignment\": \"inner\". Do not write stroke as an object with thickness or fill.",
   "Check with mokep_lint and mokep_state (its warnings list unsupported properties) after each section, and take screenshots of one section with a nodeId, not the whole page, because large images are the slowest part of a call.",
@@ -27,12 +32,18 @@ const server = new McpServer({ name: "mokep", version: "0.0.1" }, { instructions
 
 // Tell the viewer which agent is acting, on every tool call. The agent name comes from the MCP client handshake.
 // shortcut: fire-and-forget over one socket per call and a wrapper typed loosely, upgrade if tool volume grows.
+const PASSIVE = new Set(["mokep_state", "mokep_selection", "mokep_comments"]);
 const touch = (tool: string, file?: unknown) => {
   void callBridge({ type: "activity", agent: server.server.getClientVersion()?.name ?? "agent", tool, file: typeof file === "string" ? resolve(file) : undefined }, 3000).catch(() => undefined);
 };
 const register = server.registerTool.bind(server) as (...a: any[]) => unknown;
 (server as any).registerTool = (name: string, cfg: unknown, cb: (...a: any[]) => unknown) =>
-  register(name, cfg, (...args: any[]) => { touch(name.replace(/^mokep_/, ""), args[0]?.file); return cb(...args); });
+  register(name, cfg, (...args: any[]) => {
+    // An idle status ends the run; its own activity ping could arrive after it and switch the indicator back on.
+    // Only calls that work on a design turn the glow on. Looking at the viewer (state, selection, comments) does not start a run.
+    if (!(name === "mokep_status" && args[0]?.state === "idle") && !PASSIVE.has(name)) touch(name.replace(/^mokep_/, ""), args[0]?.file);
+    return cb(...args);
+  });
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 const fail = (t: string) => ({ ...text(t), isError: true as const });
 

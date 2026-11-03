@@ -27,6 +27,7 @@ export class Ui {
   private pins = abs("position:absolute;inset:0");
   private flashLayer = abs("position:absolute;inset:0");
   private flashes: { id: string; t0: number }[] = [];
+  private ghosts: { r: Rect; t0: number }[] = [];
   private bubbleTimer: ReturnType<typeof setTimeout> | undefined;
   private findInput = h("input", "mk-input") as HTMLInputElement;
   private themeSlot = h("span", "");
@@ -409,10 +410,19 @@ export class Ui {
   /** Briefly outline nodes the agent just changed or added (violet = the agent). */
   flash(ids: string[]) { const t0 = performance.now(); this.flashes.push(...ids.map((id) => ({ id, t0 }))); }
 
+  /** Where an agent just deleted nodes: a red dashed box that fades out, so a deletion is visible too. */
+  ghost(boxes: Rect[]) { const t0 = performance.now(); this.ghosts.push(...boxes.map((r) => ({ r, t0 }))); }
+
   private drawFlashes() {
     const now = performance.now();
+    this.ghosts = this.ghosts.filter((g) => now - g.t0 < 1600);
     this.flashes = this.flashes.filter((f) => now - f.t0 < 1600);
-    this.flashLayer.replaceChildren(...this.flashes.flatMap((f) => {
+    const gh = this.ghosts.map((g) => {
+      const s = this.toScreen(g.r);
+      const o = Math.max(0, 1 - (now - g.t0) / 1600);
+      return abs(`position:absolute;left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px;border:2px dashed #f43f5e;background:#f43f5e26;box-sizing:border-box;opacity:${o}`);
+    });
+    this.flashLayer.replaceChildren(...gh, ...this.flashes.flatMap((f) => {
       const r = this.rectOf(f.id);
       if (!r) return [];
       const s = this.toScreen(r);
